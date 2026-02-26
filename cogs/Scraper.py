@@ -63,7 +63,7 @@ class Scrape(commands.Cog):
 
     @discord.app_commands.command(
         name="scrape",
-        description="Checks Holly Humberstone's website for new shows and updates #concert-chats and server events.",
+        description="Checks the configured Oasis live-events page for new shows and updates #concert-chats and server events.",
     )
     async def scrape(self, interaction: discord.Interaction):
         await interaction.response.defer()
@@ -216,15 +216,19 @@ class Scrape(commands.Cog):
         return s
 
     def run_scraper(self):
-        logging.info("Running scraper using Holly Humberstone tour page HTML...")
+        logging.info("Running scraper using configured Oasis live-events page HTML...")
         audit_log(
-            "Starting scraper: Requesting event data from Holly Humberstone tour page HTML."
+            "Starting scraper: Requesting event data from configured Oasis live-events page HTML."
         )
 
         entries_raw: list[tuple[str, str, str]] = []
 
         try:
-            url = "https://www.hollyhumberstone.com/tour/"
+            url = (
+                self.config.get("features", {})
+                .get("live_events", {})
+                .get("page_url", "https://www.hollyhumberstone.com/tour/")
+            )
             response = self.http.get(url, timeout=20)
             response.raise_for_status()
 
@@ -432,7 +436,7 @@ class Scrape(commands.Cog):
                 continue
 
             try:
-                content_parts = ["Holly Humberstone"]
+                content_parts = ["Oasis"]
                 if venue:
                     content_parts.append(f"at {venue}")
                 if location:
@@ -582,7 +586,7 @@ class Scrape(commands.Cog):
             start_time, end_time = self.parse_event_dates(event_date)
 
             try:
-                description_parts = ["Holly Humberstone"]
+                description_parts = ["Oasis"]
                 if venue:
                     description_parts.append(f"at {venue}")
                 if location:
