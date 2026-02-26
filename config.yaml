@@ -22,8 +22,6 @@ features:
     duration_seconds: 600
     daily_enabled: false
     daily_hhmm_utc: "20:00"
-    webhook_name: "Oasis Drop The Track"
-    webhook_avatar_url: null
     allow_domains: "youtube.com,youtu.be,open.spotify.com,music.apple.com,soundcloud.com"
 
   songlink:

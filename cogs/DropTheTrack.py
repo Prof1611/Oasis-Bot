@@ -190,7 +190,7 @@ class DropTheTrack(commands.Cog):
         # Defaults (overridable by config.yaml and DB)
         self.default_prompt = "🎵 **What’s stuck in your head?**\nTime to spill your queue while it’s hot, clock’s ticking"
         self.default_duration_seconds = 600  # 10 min
-        self.default_webhook_name = "Oasis Drop The Track"
+        self.placeholder_webhook_name = "Drop The Track"
         self.default_allow_domains = (
             "youtube.com,youtu.be,open.spotify.com,music.apple.com,soundcloud.com"
         )
@@ -230,8 +230,6 @@ class DropTheTrack(commands.Cog):
         default_time = "08:00"
         default_dur = int(cfg.get("duration_seconds", self.default_duration_seconds))
         default_domains = str(cfg.get("allow_domains", self.default_allow_domains))
-        default_name = str(cfg.get("webhook_name", self.default_webhook_name))
-        default_avatar = cfg.get("webhook_avatar_url")
         default_channel_id = int(cfg["channel_id"]) if cfg.get("channel_id") else None
         default_ping_role_id = (
             int(cfg["ping_role_id"]) if cfg.get("ping_role_id") else None
@@ -253,8 +251,8 @@ class DropTheTrack(commands.Cog):
                 daily_enabled,
                 default_time,
                 None,
-                default_name,
-                (str(default_avatar) if default_avatar else None),
+                None,
+                None,
                 default_domains,
             ),
         )
@@ -377,8 +375,6 @@ class DropTheTrack(commands.Cog):
         Returns a usable webhook for the configured channel. Stores URL in DB.
         """
         webhook_url = settings["webhook_url"]
-        name = settings["webhook_name"] or self.default_webhook_name
-
         session = aiohttp.ClientSession()
 
         try:
@@ -395,7 +391,8 @@ class DropTheTrack(commands.Cog):
             # Create new webhook (requires Manage Webhooks)
             try:
                 created = await channel.create_webhook(
-                    name=str(name), reason="Drop The Track game webhook"
+                    name=self.placeholder_webhook_name,
+                    reason="Drop The Track game webhook",
                 )
                 self._update_settings(channel.guild.id, webhook_url=created.url)
                 wh = discord.Webhook.from_url(created.url, session=session)
@@ -420,8 +417,6 @@ class DropTheTrack(commands.Cog):
         content: Optional[str] = None,
         embed: Optional[discord.Embed] = None,
         thread: Optional[discord.Thread] = None,
-        username: Optional[str] = None,
-        avatar_url: Optional[str] = None,
         allowed_mentions: Optional[discord.AllowedMentions] = None,
     ) -> Optional[discord.WebhookMessage]:
         """
@@ -437,8 +432,6 @@ class DropTheTrack(commands.Cog):
                 msg = await wh.send(
                     content=content,
                     embed=embed,
-                    username=username,
-                    avatar_url=avatar_url,
                     allowed_mentions=allowed_mentions or discord.AllowedMentions.none(),
                     wait=True,
                     thread=thread,
@@ -466,8 +459,6 @@ class DropTheTrack(commands.Cog):
         """
         settings = self._get_settings(guild.id)
         webhook_url = settings["webhook_url"]
-        webhook_name = settings["webhook_name"] or self.default_webhook_name
-        webhook_avatar = settings["webhook_avatar_url"]
 
         # Ensure we have a webhook URL (create if needed)
         if not webhook_url:
@@ -477,8 +468,6 @@ class DropTheTrack(commands.Cog):
             # refresh settings
             settings = self._get_settings(guild.id)
             webhook_url = settings["webhook_url"]
-            webhook_name = settings["webhook_name"] or self.default_webhook_name
-            webhook_avatar = settings["webhook_avatar_url"]
 
         # Create a dated thread
         date_label = utc_today_yyyymmdd()
@@ -509,8 +498,6 @@ class DropTheTrack(commands.Cog):
             webhook_url,
             content=f"{ping}{time_line}",
             thread=thread,
-            username=str(webhook_name),
-            avatar_url=str(webhook_avatar) if webhook_avatar else None,
             allowed_mentions=discord.AllowedMentions(
                 roles=True, users=False, everyone=False
             ),
@@ -582,8 +569,6 @@ class DropTheTrack(commands.Cog):
 
         settings = self._get_settings(guild.id)
         webhook_url = settings["webhook_url"]
-        webhook_name = settings["webhook_name"] or self.default_webhook_name
-        webhook_avatar = settings["webhook_avatar_url"]
         allow_domains = settings["allow_domains"] or self.default_allow_domains
 
         # If webhook missing (deleted), attempt recreate
@@ -591,8 +576,6 @@ class DropTheTrack(commands.Cog):
             wh = await self._get_or_create_webhook(channel, settings)
             settings = self._get_settings(guild.id)
             webhook_url = settings["webhook_url"]
-            webhook_name = settings["webhook_name"] or self.default_webhook_name
-            webhook_avatar = settings["webhook_avatar_url"]
 
         # Determine submissions
         subs = self._get_submissions(int(round_row["round_id"]))
@@ -661,8 +644,6 @@ class DropTheTrack(commands.Cog):
             webhook_url or "",
             content=content,
             thread=None,
-            username=str(webhook_name),
-            avatar_url=str(webhook_avatar) if webhook_avatar else None,
             allowed_mentions=discord.AllowedMentions(
                 users=True, roles=False, everyone=False
             ),
@@ -675,8 +656,6 @@ class DropTheTrack(commands.Cog):
             webhook_url or "",
             content="Thanks for dropping! See you tomorrow 🎵",
             thread=thread,
-            username=str(webhook_name),
-            avatar_url=str(webhook_avatar) if webhook_avatar else None,
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
@@ -869,8 +848,6 @@ class DropTheTrack(commands.Cog):
         ping_role="Role to ping at the start of each round (optional).",
         duration_minutes="How long each round runs (default 10).",
         daily_enabled="Enable daily auto-start (randomized daily between 08:00 and 19:00 UTC).",
-        webhook_name="Webhook display name for game messages.",
-        webhook_avatar_url="Webhook avatar URL for game messages (optional).",
         allow_domains_csv="Comma-separated allowlist domains for submissions.",
     )
     async def drop_config(
@@ -880,8 +857,6 @@ class DropTheTrack(commands.Cog):
         ping_role: Optional[discord.Role] = None,
         duration_minutes: Optional[int] = None,
         daily_enabled: Optional[bool] = None,
-        webhook_name: Optional[str] = None,
-        webhook_avatar_url: Optional[str] = None,
         allow_domains_csv: Optional[str] = None,
     ):
         actor = interaction.user
@@ -922,18 +897,6 @@ class DropTheTrack(commands.Cog):
         if daily_enabled is not None:
             updates["daily_enabled"] = 1 if daily_enabled else 0
 
-        if webhook_name is not None:
-            updates["webhook_name"] = (
-                str(webhook_name).strip()[:80]
-                if webhook_name.strip()
-                else self.default_webhook_name
-            )
-
-        if webhook_avatar_url is not None:
-            updates["webhook_avatar_url"] = (
-                str(webhook_avatar_url).strip() if webhook_avatar_url.strip() else None
-            )
-
         if allow_domains_csv is not None:
             updates["allow_domains"] = (
                 str(allow_domains_csv).strip()
@@ -968,7 +931,6 @@ class DropTheTrack(commands.Cog):
             f"**Duration:** {humanize_seconds(int(s['duration_seconds']))}\n"
             f"**Daily:** {'Enabled' if int(s['daily_enabled']) == 1 else 'Disabled'}\n"
             f"**Today's random UTC start:** {s['daily_hhmm_utc']}\n"
-            f"**Webhook name:** {s['webhook_name']}\n"
             f"**Webhook set:** {'Yes' if s['webhook_url'] else 'No'}\n"
             f"**Allow domains:** {s['allow_domains']}\n"
         )
