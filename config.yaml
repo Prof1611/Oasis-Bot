@@ -1,7 +1,7 @@
 # =============================================================
 # Oasis Bot Configuration
 # -------------------------------------------------------------
-# Comments describe how the bot uses each value inside Oasis Bot.
+# Keep only values that are actively used by the current cogs.
 # =============================================================
 
 bot:
@@ -14,53 +14,17 @@ bot:
     - "giveaway winners"
     - "supporting moderators"
 
-channels:
-  # Forum channel where new live show threads are created by the scraper.
-  liveshows_forum_id: 1451940713913651391
-
-  # Text channel used for welcome embeds when a member joins.
-  welcome_channel_id: 1020030440263925880
-
-  # Channel that is linked in the welcome message to guide new members.
-  new_member_guide_channel_id: 1451933032666890414
-
-  # Channel in which the bot reacts to introduction posts. Set to null to disable.
-  introductions_channel_id: 1020029702188048450
-
-  # Moderation log channel that receives ban/kick/timeout summaries.
-  moderation_logs_channel_id: 1031973393886617670
-
 features:
-  welcome_messages:
-    # Toggle welcome messages. Set to false to disable joining announcements.
-    enabled: true
-
-  autorole:
-    # Automatically assign this role to new members.
-    enabled: false
-    role_id: null
-    # Give the role to bot accounts as well. Usually leave this false.
-    include_bots: false
-
-  live_events:
-    # Web page used by /scrape to discover upcoming Oasis shows.
-    page_url: "https://www.hollyhumberstone.com/tour/"
-
-  giveaways:
-    # Roles allowed to manage giveaways. Leave empty to allow Manage Server.
-    manager_role_ids: [1440017158884298904]
-    # Optional role to ping when a giveaway starts. Set to null to disable.
+  drop_the_track:
+    # Default game settings inserted for each guild on first run.
+    channel_id: null
     ping_role_id: null
-    # Default number of winners when starting a giveaway.
-    default_winner_count: 1
-    # Default duration (supports values like "30m", "2h", "1d").
-    default_duration: "1h"
-    # Maximum entries per user by default.
-    default_max_entries_per_user: 1
-    labels:
-      # Button labels shown on the giveaway message.
-      enter_button_label: "Enter"
-      leave_button_label: "Leave"
+    duration_seconds: 600
+    daily_enabled: false
+    daily_hhmm_utc: "20:00"
+    webhook_name: "Oasis Drop The Track"
+    webhook_avatar_url: null
+    allow_domains: "youtube.com,youtu.be,open.spotify.com,music.apple.com,soundcloud.com"
 
   songlink:
     # API endpoint used to fetch track details. Normally leave as default.
