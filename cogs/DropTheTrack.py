@@ -372,43 +372,43 @@ class DropTheTrack(commands.Cog):
         self, channel: discord.TextChannel, settings: sqlite3.Row
     ) -> Optional[discord.Webhook]:
         """
-        Returns a usable webhook for the configured channel. Stores URL in DB.
+        Returns a usable persistent webhook for the configured channel.
+        Reuses an existing webhook with the configured name when possible and
+        stores its URL in DB.
         """
-        webhook_url = settings["webhook_url"]
-        session = aiohttp.ClientSession()
+        desired_name = str(settings["webhook_name"] or self.placeholder_webhook_name).strip()
+        if not desired_name:
+            desired_name = self.placeholder_webhook_name
 
+        webhook: Optional[discord.Webhook] = None
         try:
-            if webhook_url:
-                try:
-                    wh = discord.Webhook.from_url(webhook_url, session=session)
-                    # Test lightweight by fetching webhook
-                    await wh.fetch()
-                    return wh
-                except Exception:
-                    # URL invalid or revoked: clear and recreate
-                    self._update_settings(channel.guild.id, webhook_url=None)
+            hooks = await channel.webhooks()
+            webhook = discord.utils.find(lambda wh: wh.name == desired_name, hooks)
 
-            # Create new webhook (requires Manage Webhooks)
-            try:
-                created = await channel.create_webhook(
-                    name=self.placeholder_webhook_name,
+            if webhook is None:
+                webhook = await channel.create_webhook(
+                    name=desired_name,
                     reason="Drop The Track game webhook",
                 )
-                self._update_settings(channel.guild.id, webhook_url=created.url)
-                wh = discord.Webhook.from_url(created.url, session=session)
-                return wh
-            except Exception as e:
-                logging.warning(
-                    f"DropTheTrack: could not create webhook in #{channel.name}: {e}"
-                )
-                return None
-        finally:
-            # Important: do NOT close session here because the webhook object needs it for sends.
-            # We'll keep a short-lived session per send via _webhook_send.
-            try:
-                await session.close()
-            except Exception:
-                pass
+        except Exception as e:
+            logging.warning(
+                f"DropTheTrack: could not access/create webhook in #{channel.name}: {e}"
+            )
+            return None
+
+        webhook_url = str(getattr(webhook, "url", "") or "").strip()
+        if not webhook_url:
+            logging.warning(
+                f"DropTheTrack: webhook '{desired_name}' found in #{channel.name} has no usable URL"
+            )
+            return None
+
+        self._update_settings(
+            channel.guild.id,
+            webhook_url=webhook_url,
+            webhook_name=desired_name,
+        )
+        return webhook
 
     async def _webhook_send(
         self,
