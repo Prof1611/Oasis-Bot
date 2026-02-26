@@ -78,8 +78,6 @@ bot = commands.Bot(command_prefix=">", intents=intents)
 # Load statuses from the config file
 bot_statuses = random.choice(status_messages)
 
-dm_forward_channel_id = bot_settings.get("dm_forward_channel_id")
-
 
 @tasks.loop(seconds=240)
 async def change_bot_status():
