@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional, List, Dict, Tuple
 import datetime
 import logging
+import random
 import re
 import sqlite3
 
@@ -29,6 +30,7 @@ cursor.execute(
         duration_seconds INTEGER NOT NULL DEFAULT 600,
         daily_enabled INTEGER NOT NULL DEFAULT 0,
         daily_hhmm_utc TEXT DEFAULT '20:00',
+        daily_random_date_utc TEXT,
         webhook_url TEXT,
         webhook_name TEXT DEFAULT 'Drop The Track',
         webhook_avatar_url TEXT,
@@ -75,6 +77,14 @@ cursor.execute(
 
 conn.commit()
 
+# Lightweight migration for older DBs
+try:
+    cursor.execute(
+        "ALTER TABLE drop_track_settings ADD COLUMN daily_random_date_utc TEXT"
+    )
+except sqlite3.OperationalError:
+    pass
+
 
 def unix_now() -> int:
     return int(datetime.datetime.now(datetime.timezone.utc).timestamp())
@@ -94,6 +104,12 @@ def parse_hhmm(s: str) -> Optional[Tuple[int, int]]:
     if hh < 0 or hh > 23 or mm < 0 or mm > 59:
         return None
     return hh, mm
+
+
+def random_daily_hhmm_utc() -> str:
+    minute_of_day = random.randint(8 * 60, 19 * 60)
+    hh, mm = divmod(minute_of_day, 60)
+    return f"{hh:02d}:{mm:02d}"
 
 
 def humanize_seconds(seconds: int) -> str:
@@ -210,7 +226,8 @@ class DropTheTrack(commands.Cog):
 
         # Insert defaults
         cfg = (self.config.get("features", {}) or {}).get("drop_the_track", {}) or {}
-        default_time = str(cfg.get("daily_hhmm_utc", "20:00"))
+        # Daily starts are randomized each UTC day (08:00-19:00), not configured.
+        default_time = "08:00"
         default_dur = int(cfg.get("duration_seconds", self.default_duration_seconds))
         default_domains = str(cfg.get("allow_domains", self.default_allow_domains))
         default_name = str(cfg.get("webhook_name", self.default_webhook_name))
@@ -225,8 +242,8 @@ class DropTheTrack(commands.Cog):
             """
             INSERT INTO drop_track_settings
                 (guild_id, channel_id, ping_role_id, duration_seconds, daily_enabled, daily_hhmm_utc,
-                 webhook_url, webhook_name, webhook_avatar_url, allow_domains)
-            VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+                 daily_random_date_utc, webhook_url, webhook_name, webhook_avatar_url, allow_domains)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
             """,
             (
                 guild_id,
@@ -235,6 +252,7 @@ class DropTheTrack(commands.Cog):
                 max(30, default_dur),
                 daily_enabled,
                 default_time,
+                None,
                 default_name,
                 (str(default_avatar) if default_avatar else None),
                 default_domains,
@@ -298,6 +316,21 @@ class DropTheTrack(commands.Cog):
             "SELECT * FROM drop_track_rounds WHERE round_id = ?", (round_id,)
         )
         return cursor.fetchone()
+
+    def _get_today_daily_hhmm(self, settings: sqlite3.Row) -> str:
+        today = utc_today_yyyymmdd()
+        scheduled = str(settings["daily_hhmm_utc"] or "").strip()
+        schedule_day = str(settings["daily_random_date_utc"] or "").strip()
+
+        if schedule_day != today or not parse_hhmm(scheduled):
+            scheduled = random_daily_hhmm_utc()
+            self._update_settings(
+                int(settings["guild_id"]),
+                daily_hhmm_utc=scheduled,
+                daily_random_date_utc=today,
+            )
+
+        return scheduled
 
     def _store_submission(
         self, round_row: sqlite3.Row, message: discord.Message, url: str
@@ -757,7 +790,7 @@ class DropTheTrack(commands.Cog):
         for s in rows:
             try:
                 guild_id = int(s["guild_id"])
-                scheduled = str(s["daily_hhmm_utc"] or "20:00")
+                scheduled = self._get_today_daily_hhmm(s)
                 if scheduled != hhmm_now:
                     continue
 
@@ -835,8 +868,7 @@ class DropTheTrack(commands.Cog):
         channel="Channel to host the daily game (thread created here).",
         ping_role="Role to ping at the start of each round (optional).",
         duration_minutes="How long each round runs (default 10).",
-        daily_enabled="Enable daily auto-start.",
-        daily_time_utc="Daily start time (UTC) in HH:MM, e.g. 20:00.",
+        daily_enabled="Enable daily auto-start (randomized daily between 08:00 and 19:00 UTC).",
         webhook_name="Webhook display name for game messages.",
         webhook_avatar_url="Webhook avatar URL for game messages (optional).",
         allow_domains_csv="Comma-separated allowlist domains for submissions.",
@@ -848,7 +880,6 @@ class DropTheTrack(commands.Cog):
         ping_role: Optional[discord.Role] = None,
         duration_minutes: Optional[int] = None,
         daily_enabled: Optional[bool] = None,
-        daily_time_utc: Optional[str] = None,
         webhook_name: Optional[str] = None,
         webhook_avatar_url: Optional[str] = None,
         allow_domains_csv: Optional[str] = None,
@@ -891,19 +922,6 @@ class DropTheTrack(commands.Cog):
         if daily_enabled is not None:
             updates["daily_enabled"] = 1 if daily_enabled else 0
 
-        if daily_time_utc is not None:
-            if not parse_hhmm(daily_time_utc):
-                await interaction.response.send_message(
-                    embed=self._embed(
-                        "Invalid time",
-                        "Use HH:MM in UTC, e.g. 20:00.",
-                        self.error_colour,
-                    ),
-                    ephemeral=True,
-                )
-                return
-            updates["daily_hhmm_utc"] = daily_time_utc.strip()
-
         if webhook_name is not None:
             updates["webhook_name"] = (
                 str(webhook_name).strip()[:80]
@@ -942,12 +960,14 @@ class DropTheTrack(commands.Cog):
                 pass
 
         s = self._get_settings(guild.id)
+        self._get_today_daily_hhmm(s)
+        s = self._get_settings(guild.id)
         desc = (
             f"**Channel:** {('<#' + str(s['channel_id']) + '>') if s['channel_id'] else 'Not set'}\n"
             f"**Ping role:** {('<@&' + str(s['ping_role_id']) + '>') if s['ping_role_id'] else 'None'}\n"
             f"**Duration:** {humanize_seconds(int(s['duration_seconds']))}\n"
             f"**Daily:** {'Enabled' if int(s['daily_enabled']) == 1 else 'Disabled'}\n"
-            f"**Daily time (UTC):** {s['daily_hhmm_utc']}\n"
+            f"**Today's random UTC start:** {s['daily_hhmm_utc']}\n"
             f"**Webhook name:** {s['webhook_name']}\n"
             f"**Webhook set:** {'Yes' if s['webhook_url'] else 'No'}\n"
             f"**Allow domains:** {s['allow_domains']}\n"
@@ -1150,13 +1170,15 @@ class DropTheTrack(commands.Cog):
             return
 
         s = self._get_settings(guild.id)
+        self._get_today_daily_hhmm(s)
+        s = self._get_settings(guild.id)
         running = self._get_running_round(guild.id)
 
         lines = [
             f"**Channel:** {('<#' + str(s['channel_id']) + '>') if s['channel_id'] else 'Not set'}",
             f"**Duration:** {humanize_seconds(int(s['duration_seconds']))}",
             f"**Daily:** {'Enabled' if int(s['daily_enabled']) == 1 else 'Disabled'}",
-            f"**Daily time (UTC):** {s['daily_hhmm_utc']}",
+            f"**Today's random UTC start:** {s['daily_hhmm_utc']}",
             f"**Webhook set:** {'Yes' if s['webhook_url'] else 'No'}",
             f"**Allow domains:** {s['allow_domains']}",
         ]
