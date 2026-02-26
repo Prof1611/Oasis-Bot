@@ -188,7 +188,7 @@ class DropTheTrack(commands.Cog):
         self.error_colour = colours["error"]
 
         # Defaults (overridable by config.yaml and DB)
-        self.default_prompt = "🎵 **What’s stuck in your head?**\nTime to spill your queue while it’s hot, clock’s ticking"
+        self.default_prompt = "🎵 **What’s stuck in your head?**"
         self.default_duration_seconds = 600  # 10 min
         self.placeholder_webhook_name = "Drop The Track"
         self.default_allow_domains = (
