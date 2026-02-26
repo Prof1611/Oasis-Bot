@@ -54,11 +54,11 @@ with open("config.yaml", "r", encoding="utf-8") as config_file:
     config = yaml.safe_load(config_file) or {}
 
 bot_settings = config.get("bot", {})
-status_messages = bot_settings.get("statuses") or ["Listening for updates"]
+status_messages = bot_settings.get("statuses") or ["Oasis updates"]
 
 if not isinstance(status_messages, list):
     logging.warning("'bot.statuses' must be a list. Falling back to a default status message.")
-    status_messages = ["Listening for updates"]
+    status_messages = ["Oasis updates"]
 
 # Retrieve the bot token from the .env file
 BOT_TOKEN = os.environ.get("TOKEN")
@@ -78,7 +78,6 @@ bot = commands.Bot(command_prefix=">", intents=intents)
 # Load statuses from the config file
 bot_statuses = random.choice(status_messages)
 
-dm_forward_channel_id = bot_settings.get("dm_forward_channel_id")
 
 
 @tasks.loop(seconds=240)
