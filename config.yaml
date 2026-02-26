@@ -1,36 +1,21 @@
 # =============================================================
-# Humberbot Configuration
+# Oasis Bot Configuration
 # -------------------------------------------------------------
-# Comments describe how the bot uses each value inside Humberbot.
+# Comments describe how the bot uses each value.
 # =============================================================
 
 bot:
-  # Listening presence lines that promote Holly Humberstone music and news.
+  # Listening presence lines themed around Oasis music and announcements.
   # Leave at least one entry.
   statuses:
-    - "The Walls Are Way Too Thin"
-    - "Deep End"
-    - "Falling Asleep At The Wheel"
-    - "London Is Lonely"
-    - "Scarlett"
-    - "Sleep Tight"
-    - "Haunted House"
-    - "Can You Afford To Lose Me?"
-    - "Girl"
-    - "The Alley"
-    - "Vanilla"
-    - "Into Your Room"
-    - "Paint My Bedroom Black"
-    - "Lauren"
-    - "Superbloodmoon"
-    - "Ghost Me"
-    - "Antichrist"
-    - "Kissing In Swimming Pools"
-    - "Hive"
-
-  # Channel that receives forwarded direct messages sent to Humberbot.
-  # Set to null to disable DM forwarding entirely.
-  dm_forward_channel_id: 1031973393886617670
+    - "Live Forever"
+    - "Wonderwall"
+    - "Champagne Supernova"
+    - "Don't Look Back in Anger"
+    - "Supersonic"
+    - "Some Might Say"
+    - "Morning Glory"
+    - "Rock ‘n’ Roll Star"
 
 channels:
   # Forum channel where new live show threads are created by the scraper.
@@ -65,13 +50,10 @@ features:
     manager_role_ids: [1440017158884298904]
     # Optional role to ping when a giveaway starts. Set to null to disable.
     ping_role_id: null
-    defaults:
-      # Default number of winners when starting a giveaway.
-      winner_count: 1
-      # Default duration (supports values like "30m", "2h", "1d").
-      duration: "1h"
-      # Maximum entries per user by default.
-      max_entries_per_user: 1
+    # Defaults consumed by the giveaways cog.
+    default_winner_count: 1
+    default_duration: "1h"
+    default_max_entries_per_user: 1
     labels:
       # Button labels shown on the giveaway message.
       enter_button_label: "Enter"
