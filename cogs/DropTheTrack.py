@@ -193,6 +193,48 @@ class DropTheTrack(commands.Cog):
         self.default_duration_seconds = 600  # 10 min
         self.placeholder_webhook_name = "Drop The Track"
         self.post_round_lock_delay_seconds = 3600  # 1 hour
+        self.drop_message_variants = [
+            "Time to spill your queue while it’s hot, clock’s ticking, {duration}",
+            "Drop your current obsession before the timer runs dry — {duration}",
+            "Queue confession booth is open for {duration}; make it count",
+            "Hit send with your hottest track — only {duration} on the clock",
+            "This is your sign to share that repeat-worthy tune ({duration})",
+            "Your aux moment starts now: post a track within {duration}",
+            "No gatekeeping — reveal the song looped in your brain in {duration}",
+            "Quick fire round: drop one song before {duration} disappears",
+            "The floor is yours for {duration}; show us what you’re playing",
+            "Current mood in audio form, please. Deadline: {duration}",
+            "Pass the aux and flex a track before the {duration} timer ends",
+            "Music dump window is open for {duration}; go go go",
+            "What track defines your vibe right now? You’ve got {duration}",
+            "Post your banger of the moment while the {duration} countdown rolls",
+            "Speedrun your best recommendation — submission window: {duration}",
+            "One link, big energy. Drop it in the next {duration}",
+            "We need your song of the day, and we need it in {duration}",
+            "Thread’s live. Bring your top pick before {duration} is up",
+            "Got a heater? Prove it. Timer says {duration}",
+            "Now playing challenge: share one track in {duration}",
+            "Tell us what’s in your headphones before {duration} expires",
+            "Queue roulette starts now — submit your entry in {duration}",
+            "Your soundtrack check-in starts now: {duration}",
+            "Drop one song that deserves the spotlight. Time left: {duration}",
+            "Playlist architects, assemble. Submission timer: {duration}",
+            "The beat clock is running — share your pick within {duration}",
+            "What song should everyone hear next? You get {duration}",
+            "Today’s sonic flex round lasts {duration}; drop your link",
+            "Incoming track battle: submit before {duration} is gone",
+            "You’ve got {duration} to post the song you can’t stop replaying",
+            "Let the music speak — one submission, {duration} max",
+            "Need fresh tunes. Add your best one in {duration}",
+            "Call your shot with one track before {duration} wraps",
+            "Drop a tune that deserves 🔥 reactions in the next {duration}",
+            "The queue is hungry — feed it within {duration}",
+            "Share your latest earworm while the {duration} window is open",
+            "This round is live for {duration}; bring your strongest link",
+            "Turn your current vibe into a URL and post in {duration}",
+            "Aux cord draft is open for {duration}; claim your spot",
+            "Moment of truth: what’s your track pick? Timer: {duration}",
+        ]
         self.default_allow_domains = (
             "youtube.com,youtu.be,open.spotify.com,music.apple.com,soundcloud.com"
         )
@@ -465,7 +507,10 @@ class DropTheTrack(commands.Cog):
         start_ts = unix_now()
         end_ts = start_ts + max(30, int(duration_seconds))
         prompt = (prompt_text or self.default_prompt).strip()
-        time_line = f"{prompt}\n\nTime to spill your queue while it’s hot, clock’s ticking, **{humanize_seconds(duration_seconds)}**"
+        drop_message = random.choice(self.drop_message_variants).format(
+            duration=humanize_seconds(duration_seconds)
+        )
+        time_line = f"{prompt}\n\n{drop_message}"
 
         # Optional role ping goes in the thread prompt (webhook message)
         ping = f"<@&{int(ping_role_id)}>\n" if ping_role_id else ""
