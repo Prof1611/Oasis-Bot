@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Optional, List, Dict, Tuple
+import asyncio
 import datetime
 import logging
 import random
@@ -191,6 +192,7 @@ class DropTheTrack(commands.Cog):
         self.default_prompt = "🎵 **What’s stuck in your head?**"
         self.default_duration_seconds = 600  # 10 min
         self.placeholder_webhook_name = "Drop The Track"
+        self.post_round_lock_delay_seconds = 3600  # 1 hour
         self.default_allow_domains = (
             "youtube.com,youtu.be,open.spotify.com,music.apple.com,soundcloud.com"
         )
@@ -230,6 +232,7 @@ class DropTheTrack(commands.Cog):
         default_time = "08:00"
         default_dur = int(cfg.get("duration_seconds", self.default_duration_seconds))
         default_domains = str(cfg.get("allow_domains", self.default_allow_domains))
+        default_webhook_url = str(cfg.get("webhook_url", "")).strip() or None
         default_channel_id = int(cfg["channel_id"]) if cfg.get("channel_id") else None
         default_ping_role_id = (
             int(cfg["ping_role_id"]) if cfg.get("ping_role_id") else None
@@ -241,7 +244,7 @@ class DropTheTrack(commands.Cog):
             INSERT INTO drop_track_settings
                 (guild_id, channel_id, ping_role_id, duration_seconds, daily_enabled, daily_hhmm_utc,
                  daily_random_date_utc, webhook_url, webhook_name, webhook_avatar_url, allow_domains)
-            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 guild_id,
@@ -250,7 +253,7 @@ class DropTheTrack(commands.Cog):
                 max(30, default_dur),
                 daily_enabled,
                 default_time,
-                None,
+                default_webhook_url,
                 None,
                 None,
                 default_domains,
@@ -368,47 +371,19 @@ class DropTheTrack(commands.Cog):
     # --------------------------------------------------------
     # Webhook helpers
     # --------------------------------------------------------
-    async def _get_or_create_webhook(
-        self, channel: discord.TextChannel, settings: sqlite3.Row
-    ) -> Optional[discord.Webhook]:
-        """
-        Returns a usable persistent webhook for the configured channel.
-        Reuses an existing webhook with the configured name when possible and
-        stores its URL in DB.
-        """
-        desired_name = str(settings["webhook_name"] or self.placeholder_webhook_name).strip()
-        if not desired_name:
-            desired_name = self.placeholder_webhook_name
+    def _resolve_webhook_url(self, guild_id: int) -> str:
+        settings = self._get_settings(guild_id)
+        db_url = str(settings["webhook_url"] or "").strip()
+        if db_url:
+            return db_url
 
-        webhook: Optional[discord.Webhook] = None
-        try:
-            hooks = await channel.webhooks()
-            webhook = discord.utils.find(lambda wh: wh.name == desired_name, hooks)
+        cfg = (self.config.get("features", {}) or {}).get("drop_the_track", {}) or {}
+        cfg_url = str(cfg.get("webhook_url", "")).strip()
+        if cfg_url:
+            self._update_settings(guild_id, webhook_url=cfg_url)
+            return cfg_url
 
-            if webhook is None:
-                webhook = await channel.create_webhook(
-                    name=desired_name,
-                    reason="Drop The Track game webhook",
-                )
-        except Exception as e:
-            logging.warning(
-                f"DropTheTrack: could not access/create webhook in #{channel.name}: {e}"
-            )
-            return None
-
-        webhook_url = str(getattr(webhook, "url", "") or "").strip()
-        if not webhook_url:
-            logging.warning(
-                f"DropTheTrack: webhook '{desired_name}' found in #{channel.name} has no usable URL"
-            )
-            return None
-
-        self._update_settings(
-            channel.guild.id,
-            webhook_url=webhook_url,
-            webhook_name=desired_name,
-        )
-        return webhook
+        return ""
 
     async def _webhook_send(
         self,
@@ -429,13 +404,17 @@ class DropTheTrack(commands.Cog):
         async with aiohttp.ClientSession() as session:
             wh = discord.Webhook.from_url(webhook_url, session=session)
             try:
-                msg = await wh.send(
-                    content=content,
-                    embed=embed,
-                    allowed_mentions=allowed_mentions or discord.AllowedMentions.none(),
-                    wait=True,
-                    thread=thread,
-                )
+                send_kwargs = {
+                    "content": content,
+                    "embed": embed,
+                    "allowed_mentions": allowed_mentions
+                    or discord.AllowedMentions.none(),
+                    "wait": True,
+                }
+                if thread is not None:
+                    send_kwargs["thread"] = thread
+
+                msg = await wh.send(**send_kwargs)
                 return msg
             except Exception as e:
                 logging.warning(f"DropTheTrack: webhook send failed: {e}")
@@ -457,17 +436,14 @@ class DropTheTrack(commands.Cog):
         Creates the thread + posts prompt via webhook.
         Returns round_id on success.
         """
-        settings = self._get_settings(guild.id)
-        webhook_url = settings["webhook_url"]
-
-        # Ensure we have a webhook URL (create if needed)
+        webhook_url = self._resolve_webhook_url(guild.id)
         if not webhook_url:
-            wh = await self._get_or_create_webhook(channel, settings)
-            if not wh:
-                return None
-            # refresh settings
-            settings = self._get_settings(guild.id)
-            webhook_url = settings["webhook_url"]
+            logging.error(
+                "DropTheTrack: no webhook URL configured for guild %s. "
+                "Set features.drop_the_track.webhook_url in config.yaml or via DB.",
+                guild.id,
+            )
+            return None
 
         # Create a dated thread
         date_label = utc_today_yyyymmdd()
@@ -568,14 +544,15 @@ class DropTheTrack(commands.Cog):
             return
 
         settings = self._get_settings(guild.id)
-        webhook_url = settings["webhook_url"]
+        webhook_url = self._resolve_webhook_url(guild.id)
         allow_domains = settings["allow_domains"] or self.default_allow_domains
-
-        # If webhook missing (deleted), attempt recreate
         if not webhook_url:
-            wh = await self._get_or_create_webhook(channel, settings)
-            settings = self._get_settings(guild.id)
-            webhook_url = settings["webhook_url"]
+            logging.error(
+                "DropTheTrack: cannot end round %s in guild %s because webhook_url is unset.",
+                int(round_row["round_id"]),
+                guild.id,
+            )
+            return
 
         # Determine submissions
         subs = self._get_submissions(int(round_row["round_id"]))
@@ -666,16 +643,29 @@ class DropTheTrack(commands.Cog):
         )
         conn.commit()
 
-        # Lock + archive the thread
+        # Lock + archive the thread after a 1-hour grace period.
+        asyncio.create_task(self._lock_and_archive_thread_later(thread))
+
+    async def _lock_and_archive_thread_later(self, thread: discord.Thread) -> None:
+        await asyncio.sleep(self.post_round_lock_delay_seconds)
         try:
             await thread.edit(
-                locked=True, archived=True, reason="Drop The Track round ended"
+                locked=True,
+                archived=True,
+                reason="Drop The Track round ended (1 hour grace elapsed)",
             )
         except Exception:
             try:
-                await thread.edit(locked=True, reason="Drop The Track round ended")
-            except Exception:
-                pass
+                await thread.edit(
+                    locked=True,
+                    reason="Drop The Track round ended (1 hour grace elapsed)",
+                )
+            except Exception as e:
+                logging.warning(
+                    "DropTheTrack: failed to lock/archive thread %s after grace period: %s",
+                    getattr(thread, "id", "unknown"),
+                    e,
+                )
 
     # --------------------------------------------------------
     # Message listener (collect submissions)
@@ -907,21 +897,6 @@ class DropTheTrack(commands.Cog):
         if updates:
             self._update_settings(guild.id, **updates)
 
-        # Ensure webhook exists if channel configured
-        s = self._get_settings(guild.id)
-        if s["channel_id"]:
-            try:
-                ch = guild.get_channel(
-                    int(s["channel_id"])
-                ) or await guild.fetch_channel(int(s["channel_id"]))
-                if isinstance(ch, discord.TextChannel):
-                    wh = await self._get_or_create_webhook(ch, s)
-                    if wh:
-                        # refresh stored url if needed
-                        s = self._get_settings(guild.id)
-            except Exception:
-                pass
-
         s = self._get_settings(guild.id)
         self._get_today_daily_hhmm(s)
         s = self._get_settings(guild.id)
@@ -1045,7 +1020,7 @@ class DropTheTrack(commands.Cog):
             await interaction.followup.send(
                 embed=self._embed(
                     "Failed",
-                    "Could not start the round. Check I can create threads and manage webhooks in that channel.",
+                    "Could not start the round. Check I can create threads and send messages using the configured Drop The Track webhook URL.",
                     self.error_colour,
                 ),
                 ephemeral=True,
