@@ -22,6 +22,7 @@ features:
     duration_seconds: 600
     daily_enabled: false
     daily_hhmm_utc: "20:00"
+    webhook_url: "https://discord.com/api/webhooks/1476717079053996043/JmbxeDg3V0IwexHgaM-uWLSKIFp4hKTAvNn3P5Xz02eQ4PaBe5U11ZDB9G7J-ckeIiBT"
     allow_domains: "youtube.com,youtu.be,open.spotify.com,music.apple.com,soundcloud.com"
 
   songlink:
