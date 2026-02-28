@@ -253,6 +253,7 @@ class DropTheTrack(commands.Cog):
                 max(30, default_dur),
                 daily_enabled,
                 default_time,
+                None,
                 default_webhook_url,
                 None,
                 None,
