@@ -183,7 +183,8 @@ class DropTheTrack(commands.Cog):
         self.error_colour = colours["error"]
 
         # Defaults (overridable by config.yaml and DB)
-        self.default_prompt = "🎵 **What’s stuck in your head?**"
+        self.prompt_title = "🎵 What’s stuck in your head?"
+        self.default_prompt = "Drop your current earworm below."
         self.default_duration_seconds = 600  # 10 min
         self.placeholder_webhook_name = "Drop The Track"
         self.post_round_lock_delay_seconds = 3600  # 1 hour
@@ -480,6 +481,36 @@ class DropTheTrack(commands.Cog):
             )
             return None
 
+        safe_duration = max(30, int(duration_seconds))
+        start_ts = unix_now()
+        end_ts = start_ts + safe_duration
+        prompt = (prompt_text or self.default_prompt).strip()
+        prompt_embed = discord.Embed(
+            title=self.prompt_title,
+            description=prompt,
+            color=self.info_colour,
+        )
+
+        # Optional role ping goes in webhook content.
+        ping = f"<@&{int(ping_role_id)}>\n" if ping_role_id else ""
+
+        # First, post the prompt embed in the configured channel.
+        channel_prompt_msg = await self._webhook_send(
+            webhook_url,
+            content=ping.rstrip(),
+            embed=prompt_embed,
+            thread=None,
+            allowed_mentions=discord.AllowedMentions(
+                roles=True, users=False, everyone=False
+            ),
+        )
+        if channel_prompt_msg is None:
+            logging.warning(
+                "DropTheTrack: cancelled round start in guild %s because channel prompt send failed.",
+                guild.id,
+            )
+            return None
+
         # Create a dated thread
         date_label = utc_today_yyyymmdd()
         thread_name = f"Drop • {date_label}"
@@ -496,22 +527,11 @@ class DropTheTrack(commands.Cog):
             )
             return None
 
-        safe_duration = max(30, int(duration_seconds))
-        start_ts = unix_now()
-        end_ts = start_ts + safe_duration
-        prompt = (prompt_text or self.default_prompt).strip()
-        drop_message = random.choice(self.drop_message_variants).format(
-            duration=humanize_seconds(safe_duration)
-        )
-        time_line = f"{prompt}\n\n{drop_message}"
-
-        # Optional role ping goes in the thread prompt (webhook message)
-        ping = f"<@&{int(ping_role_id)}>\n" if ping_role_id else ""
-
-        # Send prompt via webhook into the thread
+        # Send the same prompt embed in the thread.
         prompt_msg = await self._webhook_send(
             webhook_url,
-            content=f"{ping}{time_line}",
+            content=ping.rstrip(),
+            embed=prompt_embed,
             thread=thread,
             allowed_mentions=discord.AllowedMentions(
                 roles=True, users=False, everyone=False
