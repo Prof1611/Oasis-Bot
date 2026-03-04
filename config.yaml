@@ -8,11 +8,26 @@ bot:
   # Listening presence lines that promote Oasis news and updates.
   # Leave at least one entry.
   statuses:
-    - "Oasis community updates"
-    - "new member intros"
-    - "live show alerts"
-    - "giveaway winners"
-    - "supporting moderators"
+    - "Oasis • Live Forever"
+    - "Oasis • Wonderwall"
+    - "Oasis • Don’t Look Back in Anger"
+    - "Oasis • Champagne Supernova"
+    - "Oasis • Supersonic"
+    - "Oasis • Cigarettes & Alcohol"
+    - "Oasis • Rock ’n’ Roll Star"
+    - "Oasis • Morning Glory"
+    - "Oasis • Some Might Say"
+    - "Oasis • Slide Away"
+    - "Oasis • Acquiesce"
+    - "Oasis • The Masterplan"
+    - "Oasis • Stand by Me"
+    - "Oasis • Whatever"
+    - "Oasis • Half the World Away"
+    - "Oasis • Cast No Shadow"
+    - "Oasis • D’You Know What I Mean?"
+    - "Oasis • Little by Little"
+    - "Oasis • Lyla"
+    - "Oasis • Stop Crying Your Heart Out"
 
 features:
   drop_the_track:
@@ -22,7 +37,7 @@ features:
     duration_seconds: 600
     daily_enabled: false
     daily_hhmm_utc: "20:00"
-    webhook_url: "https://discord.com/api/webhooks/1477287503332380805/AvD4QwtV08iXuhSQbJKoPB9fKjhuYpIoOuoYfld7e9TrQrrHnbgrbsmPc_Am6T0txit9"
+    webhook_url: "https://discord.com/api/webhooks/1478846957324599438/MI9KfeeD74oQDlnep1i0OULzNPftocSsWM2whVeyAmb7Fmia2A0pfLCv7t6bFRMyozXq"
     allow_domains: "youtube.com,youtu.be,open.spotify.com,music.apple.com,soundcloud.com"
 
   songlink:
