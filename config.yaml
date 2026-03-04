@@ -36,7 +36,7 @@ features:
     ping_role_id: null
     duration_seconds: 600
     daily_enabled: false
-    daily_hhmm_utc: "20:00"
+    daily_hhmm_utc: "20:30"
     webhook_url: "https://discord.com/api/webhooks/1478846957324599438/MI9KfeeD74oQDlnep1i0OULzNPftocSsWM2whVeyAmb7Fmia2A0pfLCv7t6bFRMyozXq"
     allow_domains: "youtube.com,youtu.be,open.spotify.com,music.apple.com,soundcloud.com"
 

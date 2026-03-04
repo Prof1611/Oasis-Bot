@@ -107,12 +107,6 @@ def parse_hhmm(s: str) -> Optional[Tuple[int, int]]:
     return hh, mm
 
 
-def random_daily_hhmm_utc() -> str:
-    minute_of_day = random.randint(8 * 60, 19 * 60)
-    hh, mm = divmod(minute_of_day, 60)
-    return f"{hh:02d}:{mm:02d}"
-
-
 def humanize_seconds(seconds: int) -> str:
     seconds = max(0, int(seconds))
     if seconds < 60:
@@ -270,8 +264,8 @@ class DropTheTrack(commands.Cog):
 
         # Insert defaults
         cfg = (self.config.get("features", {}) or {}).get("drop_the_track", {}) or {}
-        # Daily starts are randomized each UTC day (08:00-19:00), not configured.
-        default_time = "08:00"
+        configured_time = str(cfg.get("daily_hhmm_utc", "20:30")).strip()
+        default_time = configured_time if parse_hhmm(configured_time) else "20:30"
         default_dur = int(cfg.get("duration_seconds", self.default_duration_seconds))
         default_domains = str(cfg.get("allow_domains", self.default_allow_domains))
         default_webhook_url = str(cfg.get("webhook_url", "")).strip() or None
@@ -362,16 +356,14 @@ class DropTheTrack(commands.Cog):
         return cursor.fetchone()
 
     def _get_today_daily_hhmm(self, settings: sqlite3.Row) -> str:
-        today = utc_today_yyyymmdd()
         scheduled = str(settings["daily_hhmm_utc"] or "").strip()
-        schedule_day = str(settings["daily_random_date_utc"] or "").strip()
-
-        if schedule_day != today or not parse_hhmm(scheduled):
-            scheduled = random_daily_hhmm_utc()
+        if not parse_hhmm(scheduled):
+            cfg = (self.config.get("features", {}) or {}).get("drop_the_track", {}) or {}
+            configured_time = str(cfg.get("daily_hhmm_utc", "20:30")).strip()
+            scheduled = configured_time if parse_hhmm(configured_time) else "20:30"
             self._update_settings(
                 int(settings["guild_id"]),
                 daily_hhmm_utc=scheduled,
-                daily_random_date_utc=today,
             )
 
         return scheduled
@@ -901,7 +893,7 @@ class DropTheTrack(commands.Cog):
         channel="Channel to host the daily game (thread created here).",
         ping_role="Role to ping at the start of each round (optional).",
         duration_minutes="How long each round runs (default 10).",
-        daily_enabled="Enable daily auto-start (randomized daily between 08:00 and 19:00 UTC).",
+        daily_enabled="Enable daily auto-start at the configured UTC time (default 20:30).",
         allow_domains_csv="Comma-separated allowlist domains for submissions.",
     )
     async def drop_config(
@@ -962,14 +954,14 @@ class DropTheTrack(commands.Cog):
             self._update_settings(guild.id, **updates)
 
         s = self._get_settings(guild.id)
-        self._get_today_daily_hhmm(s)
+        scheduled_hhmm = self._get_today_daily_hhmm(s)
         s = self._get_settings(guild.id)
         desc = (
             f"**Channel:** {('<#' + str(s['channel_id']) + '>') if s['channel_id'] else 'Not set'}\n"
             f"**Ping role:** {('<@&' + str(s['ping_role_id']) + '>') if s['ping_role_id'] else 'None'}\n"
             f"**Duration:** {humanize_seconds(int(s['duration_seconds']))}\n"
             f"**Daily:** {'Enabled' if int(s['daily_enabled']) == 1 else 'Disabled'}\n"
-            f"**Today's random UTC start:** {s['daily_hhmm_utc']}\n"
+            f"**Daily UTC start:** {scheduled_hhmm}\n"
             f"**Webhook set:** {'Yes' if s['webhook_url'] else 'No'}\n"
             f"**Allow domains:** {s['allow_domains']}\n"
         )
@@ -1182,7 +1174,7 @@ class DropTheTrack(commands.Cog):
             return
 
         s = self._get_settings(guild.id)
-        self._get_today_daily_hhmm(s)
+        scheduled_hhmm = self._get_today_daily_hhmm(s)
         s = self._get_settings(guild.id)
         running = self._get_running_round(guild.id)
 
@@ -1190,7 +1182,7 @@ class DropTheTrack(commands.Cog):
             f"**Channel:** {('<#' + str(s['channel_id']) + '>') if s['channel_id'] else 'Not set'}",
             f"**Duration:** {humanize_seconds(int(s['duration_seconds']))}",
             f"**Daily:** {'Enabled' if int(s['daily_enabled']) == 1 else 'Disabled'}",
-            f"**Today's random UTC start:** {s['daily_hhmm_utc']}",
+            f"**Daily UTC start:** {scheduled_hhmm}",
             f"**Webhook set:** {'Yes' if s['webhook_url'] else 'No'}",
             f"**Allow domains:** {s['allow_domains']}",
         ]
