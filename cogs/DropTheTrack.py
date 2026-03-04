@@ -455,7 +455,7 @@ class DropTheTrack(commands.Cog):
                     "wait": True,
                 }
                 if thread is not None:
-                    send_kwargs["thread"] = thread
+                    send_kwargs["thread_id"] = thread.id
 
                 msg = await wh.send(**send_kwargs)
                 return msg
