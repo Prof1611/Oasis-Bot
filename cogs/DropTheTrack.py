@@ -504,11 +504,12 @@ class DropTheTrack(commands.Cog):
             )
             return None
 
+        safe_duration = max(30, int(duration_seconds))
         start_ts = unix_now()
-        end_ts = start_ts + max(30, int(duration_seconds))
+        end_ts = start_ts + safe_duration
         prompt = (prompt_text or self.default_prompt).strip()
         drop_message = random.choice(self.drop_message_variants).format(
-            duration=humanize_seconds(duration_seconds)
+            duration=humanize_seconds(safe_duration)
         )
         time_line = f"{prompt}\n\n{drop_message}"
 
@@ -524,6 +525,22 @@ class DropTheTrack(commands.Cog):
                 roles=True, users=False, everyone=False
             ),
         )
+
+        # Avoid running an invisible round if the prompt could not be posted.
+        if prompt_msg is None:
+            try:
+                await thread.edit(
+                    locked=True,
+                    archived=True,
+                    reason="Drop The Track round cancelled (prompt delivery failed)",
+                )
+            except Exception:
+                pass
+            logging.warning(
+                "DropTheTrack: cancelled round start in guild %s because webhook prompt send failed.",
+                guild.id,
+            )
+            return None
 
         # Persist round in DB
         cursor.execute(
@@ -592,13 +609,6 @@ class DropTheTrack(commands.Cog):
         settings = self._get_settings(guild.id)
         webhook_url = self._resolve_webhook_url(guild.id)
         allow_domains = settings["allow_domains"] or self.default_allow_domains
-        if not webhook_url:
-            logging.error(
-                "DropTheTrack: cannot end round %s in guild %s because webhook_url is unset.",
-                int(round_row["round_id"]),
-                guild.id,
-            )
-            return
 
         # Determine submissions
         subs = self._get_submissions(int(round_row["round_id"]))
@@ -663,24 +673,32 @@ class DropTheTrack(commands.Cog):
         else:
             content = "No valid submissions this round. Try again tomorrow 🎵"
 
-        ann = await self._webhook_send(
-            webhook_url or "",
-            content=content,
-            thread=None,
-            allowed_mentions=discord.AllowedMentions(
-                users=True, roles=False, everyone=False
-            ),
-        )
-        if ann:
-            winners_message_id = int(ann.id)
+        if webhook_url:
+            ann = await self._webhook_send(
+                webhook_url,
+                content=content,
+                thread=None,
+                allowed_mentions=discord.AllowedMentions(
+                    users=True, roles=False, everyone=False
+                ),
+            )
+            if ann:
+                winners_message_id = int(ann.id)
+        else:
+            logging.error(
+                "DropTheTrack: round %s ended without announcement because webhook_url is unset for guild %s.",
+                int(round_row["round_id"]),
+                guild.id,
+            )
 
         # Closing message inside the thread via webhook
-        closing = await self._webhook_send(
-            webhook_url or "",
-            content="Thanks for dropping! See you tomorrow 🎵",
-            thread=thread,
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        if webhook_url:
+            await self._webhook_send(
+                webhook_url,
+                content="Thanks for dropping! See you tomorrow 🎵",
+                thread=thread,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
 
         # Store winners message id best-effort
         cursor.execute(
@@ -1128,6 +1146,17 @@ class DropTheTrack(commands.Cog):
         )
         conn.commit()
         row = self._fetch_round(int(row["round_id"]))
+        if not row:
+            await interaction.followup.send(
+                embed=self._embed(
+                    "Failed",
+                    "The round could not be reloaded from the database.",
+                    self.error_colour,
+                ),
+                ephemeral=True,
+            )
+            return
+
         await self._end_round(row)
 
         await interaction.followup.send(
