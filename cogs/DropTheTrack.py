@@ -184,51 +184,51 @@ class DropTheTrack(commands.Cog):
 
         # Defaults (overridable by config.yaml and DB)
         self.prompt_title = "🎵 What’s stuck in your head?"
-        self.default_prompt = "Drop your current earworm below."
+        self.default_prompt = None
         self.default_duration_seconds = 600  # 10 min
         self.placeholder_webhook_name = "Drop The Track"
         self.post_round_lock_delay_seconds = 3600  # 1 hour
         self.drop_message_variants = [
-            "Time to spill your queue while it’s hot, clock’s ticking, {duration}",
-            "Drop your current obsession before the timer runs dry — {duration}",
-            "Queue confession booth is open for {duration}; make it count",
-            "Hit send with your hottest track — only {duration} on the clock",
-            "This is your sign to share that repeat-worthy tune ({duration})",
-            "Your aux moment starts now: post a track within {duration}",
-            "No gatekeeping — reveal the song looped in your brain in {duration}",
-            "Quick fire round: drop one song before {duration} disappears",
-            "The floor is yours for {duration}; show us what you’re playing",
-            "Current mood in audio form, please. Deadline: {duration}",
-            "Pass the aux and flex a track before the {duration} timer ends",
-            "Music dump window is open for {duration}; go go go",
-            "What track defines your vibe right now? You’ve got {duration}",
-            "Post your banger of the moment while the {duration} countdown rolls",
-            "Speedrun your best recommendation — submission window: {duration}",
-            "One link, big energy. Drop it in the next {duration}",
-            "We need your song of the day, and we need it in {duration}",
-            "Thread’s live. Bring your top pick before {duration} is up",
-            "Got a heater? Prove it. Timer says {duration}",
-            "Now playing challenge: share one track in {duration}",
-            "Tell us what’s in your headphones before {duration} expires",
-            "Queue roulette starts now — submit your entry in {duration}",
-            "Your soundtrack check-in starts now: {duration}",
-            "Drop one song that deserves the spotlight. Time left: {duration}",
-            "Playlist architects, assemble. Submission timer: {duration}",
-            "The beat clock is running — share your pick within {duration}",
-            "What song should everyone hear next? You get {duration}",
-            "Today’s sonic flex round lasts {duration}; drop your link",
-            "Incoming track battle: submit before {duration} is gone",
-            "You’ve got {duration} to post the song you can’t stop replaying",
-            "Let the music speak — one submission, {duration} max",
-            "Need fresh tunes. Add your best one in {duration}",
-            "Call your shot with one track before {duration} wraps",
-            "Drop a tune that deserves 🔥 reactions in the next {duration}",
-            "The queue is hungry — feed it within {duration}",
-            "Share your latest earworm while the {duration} window is open",
-            "This round is live for {duration}; bring your strongest link",
-            "Turn your current vibe into a URL and post in {duration}",
-            "Aux cord draft is open for {duration}; claim your spot",
-            "Moment of truth: what’s your track pick? Timer: {duration}",
+            "Time to spill your queue while it’s hot, clock’s ticking.",
+            "Drop your current obsession before the timer runs dry.",
+            "Queue confession booth is open; make it count.",
+            "Hit send with your hottest track.",
+            "This is your sign to share that repeat-worthy tune.",
+            "Your aux moment starts now: post a track.",
+            "No gatekeeping — reveal the song looped in your brain.",
+            "Quick fire round: drop one song before the buzzer.",
+            "The floor is yours; show us what you’re playing.",
+            "Current mood in audio form, please.",
+            "Pass the aux and flex a track before the timer ends.",
+            "Music dump window is open; go go go.",
+            "What track defines your vibe right now?",
+            "Post your banger of the moment while the countdown rolls.",
+            "Speedrun your best recommendation.",
+            "One link, big energy. Drop it now.",
+            "We need your song of the day.",
+            "Thread’s live. Bring your top pick.",
+            "Got a heater? Prove it.",
+            "Now playing challenge: share one track.",
+            "Tell us what’s in your headphones before time expires.",
+            "Queue roulette starts now — submit your entry.",
+            "Your soundtrack check-in starts now.",
+            "Drop one song that deserves the spotlight.",
+            "Playlist architects, assemble.",
+            "The beat clock is running — share your pick.",
+            "What song should everyone hear next?",
+            "Today’s sonic flex round is on; drop your link.",
+            "Incoming track battle: submit before time is up.",
+            "Post the song you can’t stop replaying.",
+            "Let the music speak — one submission max.",
+            "Need fresh tunes. Add your best one.",
+            "Call your shot with one track before this wraps.",
+            "Drop a tune that deserves 🔥 reactions.",
+            "The queue is hungry — feed it.",
+            "Share your latest earworm while the window is open.",
+            "This round is live; bring your strongest link.",
+            "Turn your current vibe into a URL and post it.",
+            "Aux cord draft is open; claim your spot.",
+            "Moment of truth: what’s your track pick?",
         ]
         self.default_allow_domains = (
             "youtube.com,youtu.be,open.spotify.com,music.apple.com,soundcloud.com"
@@ -484,7 +484,7 @@ class DropTheTrack(commands.Cog):
         safe_duration = max(30, int(duration_seconds))
         start_ts = unix_now()
         end_ts = start_ts + safe_duration
-        prompt = (prompt_text or self.default_prompt).strip()
+        prompt = self._build_round_prompt(prompt_text=prompt_text, duration_seconds=safe_duration)
         prompt_embed = discord.Embed(
             title=self.prompt_title,
             description=prompt,
@@ -873,7 +873,7 @@ class DropTheTrack(commands.Cog):
                 cfg = (self.config.get("features", {}) or {}).get(
                     "drop_the_track", {}
                 ) or {}
-                prompt_text = str(cfg.get("prompt_text", self.default_prompt))
+                prompt_text = cfg.get("prompt_text")
 
                 await self._start_round(
                     guild=guild,
@@ -905,6 +905,18 @@ class DropTheTrack(commands.Cog):
         self, title: str, description: str, colour: discord.Color
     ) -> discord.Embed:
         return discord.Embed(title=title, description=description, color=colour)
+
+    def _build_round_prompt(
+        self, prompt_text: Optional[str], duration_seconds: int
+    ) -> str:
+        if prompt_text and str(prompt_text).strip():
+            return str(prompt_text).strip()
+
+        safe_duration = max(30, int(duration_seconds))
+        duration_minutes = max(1, (safe_duration + 59) // 60)
+        unit = "minute" if duration_minutes == 1 else "minutes"
+        base_prompt = random.choice(self.drop_message_variants)
+        return f"{base_prompt} You have {duration_minutes} {unit}."
 
     @app_commands.command(
         name="drop_config", description="Configure Drop The Track for this server."
@@ -1081,13 +1093,13 @@ class DropTheTrack(commands.Cog):
             or (
                 (self.config.get("features", {}) or {}).get("drop_the_track", {}) or {}
             ).get("prompt_text")
-            or self.default_prompt
+            or None
         )
 
         rid = await self._start_round(
             guild=guild,
             channel=target_channel,
-            prompt_text=str(prompt_text),
+            prompt_text=prompt_text,
             duration_seconds=dur,
             ping_role_id=pr,
         )
