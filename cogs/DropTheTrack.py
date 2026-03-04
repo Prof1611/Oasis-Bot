@@ -187,7 +187,7 @@ class DropTheTrack(commands.Cog):
         self.default_prompt = None
         self.default_duration_seconds = 600  # 10 min
         self.placeholder_webhook_name = "Drop The Track"
-        self.post_round_lock_delay_seconds = 3600  # 1 hour
+        self.post_round_archive_delay_seconds = 3600  # 1 hour
         self.drop_message_variants = [
             "Time to spill your queue while it’s hot, clock’s ticking.",
             "Drop your current obsession before the timer runs dry.",
@@ -705,11 +705,25 @@ class DropTheTrack(commands.Cog):
 
         # Closing message inside the thread via webhook
         if webhook_url:
+            closing_embed = discord.Embed(
+                description="Thanks for dropping! See you tomorrow 🎵",
+                colour=self.info_colour,
+            )
             await self._webhook_send(
                 webhook_url,
-                content="Thanks for dropping! See you tomorrow 🎵",
+                embed=closing_embed,
                 thread=thread,
                 allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+        # Lock the thread immediately after posting the closing embed.
+        try:
+            await thread.edit(locked=True, reason="Drop The Track round ended")
+        except Exception as e:
+            logging.warning(
+                "DropTheTrack: failed to lock thread %s at round end: %s",
+                getattr(thread, "id", "unknown"),
+                e,
             )
 
         # Store winners message id best-effort
@@ -719,14 +733,13 @@ class DropTheTrack(commands.Cog):
         )
         conn.commit()
 
-        # Lock + archive the thread after a 1-hour grace period.
-        asyncio.create_task(self._lock_and_archive_thread_later(thread))
+        # Archive the thread after a 1-hour grace period.
+        asyncio.create_task(self._archive_thread_later(thread))
 
-    async def _lock_and_archive_thread_later(self, thread: discord.Thread) -> None:
-        await asyncio.sleep(self.post_round_lock_delay_seconds)
+    async def _archive_thread_later(self, thread: discord.Thread) -> None:
+        await asyncio.sleep(self.post_round_archive_delay_seconds)
         try:
             await thread.edit(
-                locked=True,
                 archived=True,
                 reason="Drop The Track round ended (1 hour grace elapsed)",
             )
@@ -738,7 +751,7 @@ class DropTheTrack(commands.Cog):
                 )
             except Exception as e:
                 logging.warning(
-                    "DropTheTrack: failed to lock/archive thread %s after grace period: %s",
+                    "DropTheTrack: failed to archive thread %s after grace period: %s",
                     getattr(thread, "id", "unknown"),
                     e,
                 )
