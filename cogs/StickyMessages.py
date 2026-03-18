@@ -6,121 +6,13 @@ import asyncio
 from discord import app_commands
 from discord.ext import commands
 import datetime
-from typing import Optional, Dict, Iterable, Sequence, Union, List, Set
+from typing import Optional
 
-# ============================================================
-# Discord embed limits and pagination helpers
-# ============================================================
-EMBED_TOTAL_CHAR_LIMIT = 6000
-EMBED_DESCRIPTION_LIMIT = 4096
-EMBED_FIELD_NAME_LIMIT = 256
-EMBED_FIELD_VALUE_LIMIT = 1024
-EMBED_MAX_FIELDS = 25
-
-
-def embed_length(embed: discord.Embed) -> int:
-    """Estimate total characters in an embed to avoid hitting the global 6000 character cap."""
-    total = 0
-    if embed.title:
-        total += len(embed.title)
-    if embed.description:
-        total += len(embed.description)
-    if embed.footer and embed.footer.text:
-        total += len(embed.footer.text)
-    if embed.author and embed.author.name:
-        total += len(embed.author.name)
-    for f in embed.fields:
-        total += len(f.name or "")
-        total += len(f.value or "")
-    return total
-
-
-class PagedView(discord.ui.View):
-    """Button view that paginates through a list of embeds. Restricted to the requesting user."""
-
-    def __init__(
-        self, user_id: int, pages: List[discord.Embed], timeout: Optional[float] = 120
-    ):
-        super().__init__(timeout=timeout)
-        self.user_id = user_id
-        self.pages = pages
-        self.index = 0
-        self._update_button_states()
-
-    def _update_button_states(self):
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                if child.custom_id == "first":
-                    child.disabled = self.index == 0
-                elif child.custom_id == "prev":
-                    child.disabled = self.index == 0
-                elif child.custom_id == "next":
-                    child.disabled = self.index >= len(self.pages) - 1
-                elif child.custom_id == "last":
-                    child.disabled = self.index >= len(self.pages) - 1
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message(
-                "Only the requester can use these buttons.", ephemeral=True
-            )
-            return False
-        return True
-
-    async def _show(self, interaction: discord.Interaction):
-        self._update_button_states()
-        try:
-            await interaction.response.edit_message(
-                embed=self.pages[self.index], view=self
-            )
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(
-                embed=self.pages[self.index], view=self
-            )
-
-    @discord.ui.button(
-        label="⏮ First", style=discord.ButtonStyle.secondary, custom_id="first"
-    )
-    async def first(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.index = 0
-        await self._show(interaction)
-
-    @discord.ui.button(
-        label="◀ Previous", style=discord.ButtonStyle.secondary, custom_id="prev"
-    )
-    async def prev(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.index > 0:
-            self.index -= 1
-        await self._show(interaction)
-
-    @discord.ui.button(
-        label="Next ▶", style=discord.ButtonStyle.secondary, custom_id="next"
-    )
-    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.index < len(self.pages) - 1:
-            self.index += 1
-        await self._show(interaction)
-
-    @discord.ui.button(
-        label="Last ⏭", style=discord.ButtonStyle.secondary, custom_id="last"
-    )
-    async def last(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.index = len(self.pages) - 1
-        await self._show(interaction)
-
-
-# ============================================================
-# Sticky system
-# ============================================================
-
-# Define invisible marker for sticky messages using zero-width characters.
+# Define an invisible marker for sticky messages using zero-width characters.
 STICKY_MARKER = "\u200b\u200c\u200d\u2060"
 
-# Pattern that matches any run of our zero-width characters anywhere in text.
-ZERO_WIDTH_RUN = re.compile(r"[\u200b\u200c\u200d\u2060]+")
-
-# How deep we manually scan when hunting for stale stickies (older than 14d, etc.)
-MANUAL_SCAN_LIMIT = 2000
+# How deep to scan when purging old stickies
+STICKY_PURGE_SCAN_LIMIT = 500
 
 
 def audit_log(message: str):
@@ -134,104 +26,36 @@ def make_embed(title: str, description: str, color: discord.Color) -> discord.Em
     return discord.Embed(title=title, description=description, color=color)
 
 
-GuildTextLike = Union[discord.TextChannel, discord.Thread]
-
-
-# Colour picker reused from CustomEmbed - extended
+# Colour picker reused from CustomEmbed, extended to support custom title flow
 class ColourSelect(discord.ui.Select):
     def __init__(self, parent_view: "StickyColourPickView"):
         options = [
-            discord.SelectOption(
-                label="Default", value="default", description="Blurple (#5865F2)"
-            ),
-            discord.SelectOption(
-                label="Custom Hex",
-                value="custom_hex",
-                description="Enter your own hex code…",
-            ),
-            discord.SelectOption(
-                label="Random", value="random", description="Bot picks a random colour!"
-            ),
-            discord.SelectOption(
-                label="White", value="white", description="Pure White (#FFFFFF)"
-            ),
-            discord.SelectOption(
-                label="Red", value="red", description="Carmine Pink (#E74C3C)"
-            ),
-            discord.SelectOption(
-                label="Dark Red", value="dark_red", description="Red Birch (#992D22)"
-            ),
-            discord.SelectOption(
-                label="Orange", value="orange", description="Dark Cheddar (#E67E22)"
-            ),
-            discord.SelectOption(
-                label="Yellow", value="yellow", description="Corn (#FEE75C)"
-            ),
-            discord.SelectOption(
-                label="Gold", value="gold", description="Tanned Leather (#F1C40F)"
-            ),
-            discord.SelectOption(
-                label="Green", value="green", description="UFO Green (#2ECC71)"
-            ),
-            discord.SelectOption(
-                label="Dark Green", value="dark_green", description="Pine (#145A32)"
-            ),
-            discord.SelectOption(
-                label="Teal", value="teal", description="Aloha (#1ABC9C)"
-            ),
-            discord.SelectOption(
-                label="Dark Teal", value="dark_teal", description="Blue Green (#11806A)"
-            ),
-            discord.SelectOption(
-                label="Blue", value="blue", description="Dayflower (#3498DB)"
-            ),
-            discord.SelectOption(
-                label="Dark Blue", value="dark_blue", description="Deep Water (#206694)"
-            ),
-            discord.SelectOption(
-                label="Blurple", value="blurple", description="Blue Genie (#5865F2)"
-            ),
-            discord.SelectOption(
-                label="OG Blurple",
-                value="og_blurple",
-                description="Zeus' Temple (#7289DA)",
-            ),
-            discord.SelectOption(
-                label="Fuchsia", value="fuchsia", description="Hot Pink (#EB459E)"
-            ),
-            discord.SelectOption(
-                label="Magenta", value="magenta", description="Vivid Magenta (#E84393)"
-            ),
-            discord.SelectOption(
-                label="Purple", value="purple", description="Deep Lilac (#9B59B6)"
-            ),
-            discord.SelectOption(
-                label="Dark Purple",
-                value="dark_purple",
-                description="Maximum Purple (#71368A)",
-            ),
-            discord.SelectOption(
-                label="Greyple", value="greyple", description="Irogon Blue (#99AAB5)"
-            ),
-            discord.SelectOption(
-                label="Light Grey",
-                value="light_grey",
-                description="Harrison Grey (#979C9F)",
-            ),
-            discord.SelectOption(
-                label="Darker Grey",
-                value="darker_grey",
-                description="Morro Bay (#546E7A)",
-            ),
-            discord.SelectOption(
-                label="Dark Theme",
-                value="dark_theme",
-                description="Discord UI (#36393F)",
-            ),
+            discord.SelectOption(label="Default", value="default", description="Black (#000000)"),
+            discord.SelectOption(label="Custom Hex", value="custom_hex", description="Enter your own hex code..."),
+            discord.SelectOption(label="Random", value="random", description="Pick a random hue"),
+            discord.SelectOption(label="Teal", value="teal", description="Aloha (#1ABC9C)"),
+            discord.SelectOption(label="Dark Teal", value="dark_teal", description="Blue Green (#11806A)"),
+            discord.SelectOption(label="Green", value="green", description="UFO Green (#2ECC71)"),
+            discord.SelectOption(label="Blurple", value="blurple", description="Blue Genie (#5865F2)"),
+            discord.SelectOption(label="OG Blurple", value="og_blurple", description="Zeus' Temple (#7289DA)"),
+            discord.SelectOption(label="Blue", value="blue", description="Dayflower (#3498DB)"),
+            discord.SelectOption(label="Dark Blue", value="dark_blue", description="Deep Water (#206694)"),
+            discord.SelectOption(label="Purple", value="purple", description="Deep Lilac (#9B59B6)"),
+            discord.SelectOption(label="Dark Purple", value="dark_purple", description="Maximum Purple (#71368A)"),
+            discord.SelectOption(label="Gold", value="gold", description="Tanned Leather (#F1C40F)"),
+            discord.SelectOption(label="Dark Gold", value="dark_gold", description="Tree Sap (#C27C0E)"),
+            discord.SelectOption(label="Orange", value="orange", description="Dark Cheddar (#E67E22)"),
+            discord.SelectOption(label="Dark Orange", value="dark_orange", description="Pepperoni (#A84300)"),
+            discord.SelectOption(label="Red", value="red", description="Carmine Pink (#E74C3C)"),
+            discord.SelectOption(label="Dark Red", value="dark_red", description="Red Birch (#992D22)"),
+            discord.SelectOption(label="Greyple", value="greyple", description="Irogon Blue (#99AAB5)"),
+            discord.SelectOption(label="Light Grey", value="light_grey", description="Harrison Grey (#979C9F)"),
+            discord.SelectOption(label="Darker Grey", value="darker_grey", description="Morro Bay (#546E7A)"),
+            discord.SelectOption(label="Dark Theme", value="dark_theme", description="Antarctic Deep (transparent)"),
+            discord.SelectOption(label="Yellow", value="yellow", description="Corn (#FEE75C)"),
         ]
-
         super().__init__(
-            placeholder="Choose an embed colour…",
+            placeholder="Choose an embed colour...",
             min_values=1,
             max_values=1,
             options=options,
@@ -245,26 +69,21 @@ class ColourSelect(discord.ui.Select):
                 HexContentModal(
                     self.parent_view.channel,
                     self.parent_view.sticky_cog,
-                    self.parent_view.selected_format,
+                    self.parent_view.selected_format
                 )
             )
         else:
             try:
-                if choice == "default":
-                    self.parent_view.chosen_colour = discord.Color.blurple()
-                elif choice == "random":
-                    self.parent_view.chosen_colour = discord.Color.random()
-                else:
-                    factory = getattr(discord.Color, choice)
-                    self.parent_view.chosen_colour = factory()
+                factory = getattr(discord.Color, choice)
+                self.parent_view.chosen_colour = factory()
             except Exception:
-                self.parent_view.chosen_colour = discord.Color.blurple()
+                self.parent_view.chosen_colour = discord.Color.default()
             await interaction.response.send_modal(
                 StickyModal(
                     self.parent_view.bot,
                     self.parent_view.sticky_cog,
                     self.parent_view.selected_format,
-                    self.parent_view.chosen_colour,
+                    self.parent_view.chosen_colour
                 )
             )
         audit_log(f"{interaction.user} picked colour '{choice}' for sticky embed.")
@@ -276,7 +95,7 @@ class StickyColourPickView(discord.ui.View):
         self.bot = bot
         self.sticky_cog = sticky_cog
         self.channel = channel
-        self.selected_format = selected_format
+        self.selected_format = selected_format  # always "embed" here
         self.chosen_colour = discord.Color.default()
         self.add_item(ColourSelect(self))
 
@@ -287,19 +106,18 @@ class StickyColourPickView(discord.ui.View):
             child.disabled = True
 
 
-class HexContentModal(discord.ui.Modal, title="Custom HEX Embed"):
+class HexContentModal(discord.ui.Modal, title="Custom HEX Sticky"):
     hex_code = discord.ui.TextInput(
-        label="HEX Code",
-        style=discord.TextStyle.short,
-        required=True,
-        placeholder="#RRGGBB or RRGGBB",
-        max_length=7,
+        label="HEX Code", style=discord.TextStyle.short, required=True,
+        placeholder="#RRGGBB or RRGGBB", max_length=7,
+    )
+    embed_title = discord.ui.TextInput(
+        label="Embed Title", style=discord.TextStyle.short, required=False,
+        placeholder="Title for the sticky embed..."
     )
     sticky_message = discord.ui.TextInput(
-        label="Sticky Message",
-        style=discord.TextStyle.long,
-        required=True,
-        placeholder="Enter your sticky message here…",
+        label="Sticky Message", style=discord.TextStyle.long, required=True,
+        placeholder="Enter your sticky message here..."
     )
 
     def __init__(self, channel, sticky_cog, selected_format):
@@ -307,46 +125,44 @@ class HexContentModal(discord.ui.Modal, title="Custom HEX Embed"):
         self.channel = channel
         self.sticky_cog = sticky_cog
         self.selected_format = selected_format
-        self.chosen_colour = None
 
     async def on_submit(self, interaction: discord.Interaction):
         hex_str = self.hex_code.value.strip().lstrip("#")
         if not re.fullmatch(r"[0-9A-Fa-f]{6}", hex_str):
+            err = make_embed("Error", "Invalid hex. Must be exactly 6 hex digits.", discord.Color.red())
+            return await interaction.response.send_message(embed=err, ephemeral=True)
+
+        colour = discord.Color(int(hex_str, 16))
+        title = self.embed_title.value.strip() if self.embed_title.value else ""
+        content = self.sticky_message.value
+
+        # Use the cog helper to create or replace the sticky
+        try:
+            await self.sticky_cog.create_or_replace_sticky(
+                interaction=interaction,
+                channel=self.channel,
+                title=title,
+                content=content,
+                fmt="embed",
+                colour=colour
+            )
+        except Exception as e:
+            logging.error(f"HexContentModal failed: {e}")
             err = make_embed(
                 "Error",
-                "Invalid hex. Must be exactly 6 hex digits.",
+                "Something went wrong while setting the sticky message. Please try again later.",
                 discord.Color.red(),
             )
             return await interaction.response.send_message(embed=err, ephemeral=True)
-        colour = discord.Color(int(hex_str, 16))
-        modal = StickyModal(
-            interaction.client,
-            self.sticky_cog,
-            self.selected_format,
-            colour,
-            prefilled_message=self.sticky_message.value,
-        )
-        await modal.on_submit(interaction)
 
 
 class StickyFormatSelect(discord.ui.Select):
-    def __init__(self, sticky_cog: "StickyMessages"):
+    def __init__(self, sticky_cog: "Sticky"):
         options = [
-            discord.SelectOption(
-                label="Normal", value="normal", description="Plain text sticky"
-            ),
-            discord.SelectOption(
-                label="Embed",
-                value="embed",
-                description="Embed sticky with custom colour",
-            ),
+            discord.SelectOption(label="Normal", value="normal", description="Plain text sticky"),
+            discord.SelectOption(label="Embed", value="embed", description="Embed sticky with custom colour and title"),
         ]
-        super().__init__(
-            placeholder="Choose message format…",
-            min_values=1,
-            max_values=1,
-            options=options,
-        )
+        super().__init__(placeholder="Choose message format...", min_values=1, max_values=1, options=options)
         self.sticky_cog = sticky_cog
 
     async def callback(self, interaction: discord.Interaction):
@@ -355,38 +171,42 @@ class StickyFormatSelect(discord.ui.Select):
             await interaction.response.send_modal(
                 StickyModal(interaction.client, self.sticky_cog, "normal", None)
             )
-        else:
+        else:  # embed
             view = StickyColourPickView(
                 interaction.client, self.sticky_cog, interaction.channel, "embed"
             )
             await interaction.response.send_message(
-                "Choose a colour for your sticky embed:", view=view, ephemeral=True
+                embed=discord.Embed(
+                    description="Choose a colour for your sticky embed:"
+                ),
+                view=view,
+                ephemeral=True,
             )
         audit_log(f"{interaction.user} selected sticky format '{choice}'.")
 
 
 class StickyFormatView(discord.ui.View):
-    def __init__(self, sticky_cog: "StickyMessages"):
+    def __init__(self, sticky_cog: "Sticky"):
         super().__init__()
         self.add_item(StickyFormatSelect(sticky_cog))
 
 
+# Modal for both normal and embed stickies
+# If embed, a title field is provided and saved
 class StickyModal(discord.ui.Modal, title="Set Sticky Message"):
+    sticky_title = discord.ui.TextInput(
+        label="Embed Title",
+        style=discord.TextStyle.short,
+        required=False,
+        placeholder="Title for the sticky embed..."
+    )
     sticky_message = discord.ui.TextInput(
-        label="Sticky Message",
-        style=discord.TextStyle.long,
-        required=True,
-        placeholder="Enter your sticky message here…",
+        label="Sticky Message", style=discord.TextStyle.long, required=True,
+        placeholder="Enter your sticky message here..."
     )
 
-    def __init__(
-        self,
-        bot: commands.Bot,
-        sticky_cog: "StickyMessages",
-        selected_format: str,
-        colour: Optional[discord.Color],
-        prefilled_message: Optional[str] = None,
-    ):
+    def __init__(self, bot: commands.Bot, sticky_cog: "Sticky",
+                 selected_format: str, colour: Optional[discord.Color], prefilled_message: str = None, prefilled_title: str = None):
         super().__init__()
         self.bot = bot
         self.sticky_cog = sticky_cog
@@ -394,113 +214,62 @@ class StickyModal(discord.ui.Modal, title="Set Sticky Message"):
         self.colour = colour or discord.Color.blurple()
         if prefilled_message:
             self.sticky_message.default = prefilled_message
+        if prefilled_title:
+            self.sticky_title.default = prefilled_title
 
     async def on_submit(self, interaction: discord.Interaction):
         content = self.sticky_message.value
+        title = self.sticky_title.value.strip() if (self.selected_format == "embed" and self.sticky_title.value) else ""
         channel = interaction.channel
-        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
-            err = make_embed("Error", "This isn’t a text channel.", discord.Color.red())
-            return await interaction.response.send_message(embed=err, ephemeral=True)
-
-        perms = channel.permissions_for(interaction.guild.me)
-        if not perms.send_messages or (
-            self.selected_format == "embed" and not perms.embed_links
-        ):
-            err = make_embed(
-                "Error", "I lack the permissions to post here.", discord.Color.red()
-            )
-            return await interaction.response.send_message(embed=err, ephemeral=True)
-
-        # Defer early to avoid Unknown interaction if this takes > 3s
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True, thinking=True)
-
-        # Replace any existing sticky first, under lock.
-        await self.sticky_cog._replace_sticky_atomically(
-            channel,
-            {
-                "content": content,
-                "format": self.selected_format,
-                "color": self.colour.value if self.selected_format == "embed" else 0,
-            },
-        )
-
-        ok = make_embed(
-            "Sticky Set",
-            f"Sticky successfully set in {channel.mention}.",
-            discord.Color.green(),
-        )
-        await interaction.followup.send(embed=ok, ephemeral=True)
-        audit_log(
-            f"{interaction.user} set a '{self.selected_format}' sticky in #{channel.name}."
+        await self.sticky_cog.create_or_replace_sticky(
+            interaction=interaction,
+            channel=channel,
+            title=title,
+            content=content,
+            fmt=self.selected_format,
+            colour=self.colour
         )
 
 
-class StickyMessages(commands.Cog):
+class Sticky(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.stickies: Dict[int, Dict] = {}
+        self.stickies = {}
         self.db = sqlite3.connect("database.db", check_same_thread=False)
+        # Ensure table and columns exist. Add title and color if missing.
         self.db.execute(
-            "CREATE TABLE IF NOT EXISTS sticky_messages (channel_id INTEGER PRIMARY KEY, content TEXT, message_id INTEGER, format TEXT, color INTEGER DEFAULT 0)"
+            "CREATE TABLE IF NOT EXISTS sticky_messages (channel_id INTEGER PRIMARY KEY, title TEXT, content TEXT, message_id INTEGER, format TEXT, color INTEGER DEFAULT 0)"
         )
-        cols = [
-            r[1]
-            for r in self.db.execute("PRAGMA table_info(sticky_messages)").fetchall()
-        ]
+        cols = [r[1] for r in self.db.execute("PRAGMA table_info(sticky_messages)").fetchall()]
+        if "title" not in cols:
+            self.db.execute("ALTER TABLE sticky_messages ADD COLUMN title TEXT DEFAULT ''")
         if "color" not in cols:
-            self.db.execute(
-                "ALTER TABLE sticky_messages ADD COLUMN color INTEGER DEFAULT 0"
-            )
+            self.db.execute("ALTER TABLE sticky_messages ADD COLUMN color INTEGER DEFAULT 0")
         self.db.commit()
         self.load_stickies()
-
-        # Concurrency and debouncing
-        self.locks: Dict[int, asyncio.Lock] = {}
-        self.debounce_tasks: Dict[int, asyncio.Task] = {}
-        self.last_repost_times: Dict[int, float] = {}
-        self.last_cleanup_times: Dict[int, float] = {}
-        # Channels currently undergoing an intentional sticky removal.
-        self._suppress_repost: Set[int] = set()
-        # Use a slightly longer debounce window to reduce churn and duplicates during active chat
-        self.debounce_interval = 1.2
-        # Hard cap for how often a sticky is reposted in busy channels.
-        self.repost_cooldown = 20.0
-        # How often to run a lightweight duplicate cleanup during normal repost cycles.
-        self.cleanup_interval = 600.0
-
-    def cog_unload(self):
-        try:
-            self.db.close()
-        except Exception as e:
-            logging.error(f"Error closing Sticky cog database: {e}")
+        self.initialised = False
+        self.locks = {}
+        self.debounce_tasks = {}
+        self.debounce_interval = 1.0
 
     def load_stickies(self):
         self.stickies = {}
         cursor = self.db.execute(
-            "SELECT channel_id, content, message_id, format, color FROM sticky_messages"
+            "SELECT channel_id, title, content, message_id, format, color FROM sticky_messages"
         )
         for row in cursor.fetchall():
             self.stickies[int(row[0])] = {
-                "content": row[1],
-                "message_id": row[2],
-                "format": row[3],
-                "color": row[4],
+                "title": row[1] or "",
+                "content": row[2],
+                "message_id": row[3],
+                "format": row[4],
+                "color": row[5],
             }
 
-    def update_sticky_in_db(
-        self, channel_id: int, content: str, message_id: int, fmt: str, colour: int
-    ):
-        # Explicitly delete any existing row first to avoid duplicates if schema changes elsewhere.
-        try:
-            self.db.execute(
-                "DELETE FROM sticky_messages WHERE channel_id = ?", (channel_id,)
-            )
-        except Exception:
-            pass
+    def update_sticky_in_db(self, channel_id: int, title: str, content: str, message_id: int, fmt: str, colour: int):
         self.db.execute(
-            "INSERT INTO sticky_messages (channel_id, content, message_id, format, color) VALUES (?, ?, ?, ?, ?)",
-            (channel_id, content, message_id, fmt, colour),
+            "INSERT OR REPLACE INTO sticky_messages (channel_id, title, content, message_id, format, color) VALUES (?, ?, ?, ?, ?, ?)",
+            (channel_id, title, content, message_id, fmt, colour),
         )
         self.db.commit()
 
@@ -510,597 +279,234 @@ class StickyMessages(commands.Cog):
         )
         self.db.commit()
 
-    # -----------------------
-    # Utility and helpers
-    # -----------------------
-
-    def _is_message_sticky(self, msg: discord.Message) -> bool:
-        """Detect our sticky messages robustly, both text and embed forms."""
-        if msg.author.id != (self.bot.user.id if self.bot.user else 0):
+    @staticmethod
+    def _message_is_sticky(bot_user: discord.User, msg: discord.Message) -> bool:
+        """Detect if a message is a sticky created by this bot."""
+        if msg.author.id != bot_user.id:
             return False
-
-        # Plain text sticky: marker anywhere in content
-        if msg.content and ZERO_WIDTH_RUN.search(msg.content):
-            return True
-
-        # Embed sticky: look through all embeds for marker in description, fields, or footer
-        for e in msg.embeds or []:
-            try:
-                if e.description and ZERO_WIDTH_RUN.search(e.description):
+        try:
+            if msg.content and STICKY_MARKER in msg.content:
+                return True
+            for emb in msg.embeds:
+                if emb.description and STICKY_MARKER in emb.description:
                     return True
-                for f in e.fields:
-                    if f.value and ZERO_WIDTH_RUN.search(str(f.value)):
-                        return True
-                if e.footer and e.footer.text and ZERO_WIDTH_RUN.search(e.footer.text):
-                    return True
-            except Exception:
-                continue
-
+        except Exception:
+            return False
         return False
 
-    async def _manual_sweep_for_stickies(
-        self,
-        channel: GuildTextLike,
-        skip_ids: Optional[Sequence[int]] = None,
-        limit: int = MANUAL_SCAN_LIMIT,
-    ):
-        """Manually scan recent history and delete any detected stickies, regardless of age."""
-        skip = set(skip_ids or [])
+    async def _purge_old_stickies(self, channel: discord.TextChannel, keep_id: Optional[int] = None):
+        """Delete all older sticky messages in the channel created by this bot, except keep_id."""
         deleted = 0
-        try:
-            async for msg in channel.history(limit=limit):
-                if msg.id in skip:
-                    continue
-                if self._is_message_sticky(msg):
-                    try:
-                        await msg.delete()
-                        deleted += 1
-                    except Exception as e:
-                        logging.warning(f"Manual delete failed in #{channel.name}: {e}")
-        except Exception as e:
-            logging.debug(f"Manual sweep error in #{channel.name}: {e}")
-        if deleted:
-            audit_log(
-                f"Manual sticky sweep deleted {deleted} messages in #{channel.name}."
-            )
-
-    async def _purge_old_stickies(
-        self, channel: GuildTextLike, skip_id: Optional[int] = None
-    ):
-        """Delete all previous sticky messages in the channel, optionally skipping one id.
-
-        Strategy:
-          1) Try purge with a check (fast). This will skip >14d silently.
-          2) Always follow with a manual sweep to catch anything the purge skipped.
-        """
         perms = channel.permissions_for(channel.guild.me)
-        can_manage = perms.manage_messages
-        # 1) Bulk purge if possible
-        if perms.send_messages and can_manage:
+        # We can always delete our own messages. Manage Messages only needed if trying to delete others.
+        async for msg in channel.history(limit=STICKY_PURGE_SCAN_LIMIT):
+            if self._message_is_sticky(self.bot.user, msg):
+                if keep_id is not None and msg.id == keep_id:
+                    continue
+                try:
+                    await msg.delete()
+                    deleted += 1
+                except discord.Forbidden:
+                    # Should not happen for own messages, but log if it does
+                    logging.warning(f"Forbidden trying to delete sticky in #{channel.name}. Check permissions.")
+                except Exception as e:
+                    logging.error(f"Error deleting old sticky in #{channel.name}: {e}")
+        if deleted:
+            audit_log(f"Purged {deleted} old sticky messages in #{channel.name}.")
 
-            def check(m: discord.Message) -> bool:
-                if skip_id is not None and m.id == skip_id:
-                    return False
-                return self._is_message_sticky(m)
+    async def update_sticky_for_channel(self, channel: discord.abc.Messageable, sticky: dict, force_update: bool = False):
+        if not isinstance(channel, discord.TextChannel):
+            logging.warning(f"Channel {channel} is not a TextChannel. Skipping sticky update.")
+            return
 
+        perms = channel.permissions_for(channel.guild.me)
+        if not perms.send_messages:
+            logging.warning(f"Missing Send Messages in #{channel.name}. Cannot update sticky.")
+            return
+
+        lock = self.locks.setdefault(channel.id, asyncio.Lock())
+        async with lock:
+            # Check most recent message to avoid unnecessary reposts
             try:
-                await channel.purge(limit=200, check=check, oldest_first=False)
+                latest: Optional[discord.Message] = None
+                async for m in channel.history(limit=1):
+                    latest = m
+                    break
             except Exception as e:
-                # Ignore; we will still do the manual pass
-                logging.debug(
-                    f"Purge failed in #{channel.name}, will manual sweep: {e}"
-                )
+                logging.error(f"Failed to fetch latest message in #{channel.name}: {e}")
+                latest = None
 
-        # 2) Manual sweep (handles >14d and when manage_messages is missing)
-        await self._manual_sweep_for_stickies(
-            channel, skip_ids=[skip_id] if skip_id else None
-        )
+            if latest and not force_update:
+                # If the latest message is our sticky, just purge older ones and exit
+                if self._message_is_sticky(self.bot.user, latest):
+                    await self._purge_old_stickies(channel, keep_id=latest.id)
+                    return
 
-    async def _send_sticky(
-        self, channel: GuildTextLike, content: str, fmt: str, colour_value: int
-    ):
-        """Send a sticky message in the requested format."""
+            # Otherwise delete the previous tracked sticky if it exists, then send a new one
+            try:
+                if sticky.get("message_id"):
+                    try:
+                        old_message = await channel.fetch_message(int(sticky["message_id"]))
+                        await old_message.delete()
+                    except discord.NotFound:
+                        pass
+                    except Exception as e:
+                        logging.error(f"Error deleting old sticky in channel #{channel.name}: {e}")
+
+                fmt = sticky.get("format", "normal")
+                colour = sticky.get("color", discord.Color.blurple().value)
+                title = sticky.get("title", "") or ""
+                new_sticky = await self._send_sticky(channel, title, sticky["content"], fmt, colour)
+
+                self.stickies[channel.id] = {
+                    "title":     title,
+                    "content":   sticky["content"],
+                    "message_id": new_sticky.id,
+                    "format":    fmt,
+                    "color":     colour,
+                }
+                self.update_sticky_in_db(channel.id, title, sticky["content"], new_sticky.id, fmt, colour)
+
+                # After sending, purge any other lingering stickies
+                await self._purge_old_stickies(channel, keep_id=new_sticky.id)
+
+            except Exception as e:
+                logging.error(f"Error updating sticky in channel #{channel.name}: {e}")
+
+    async def _debounced_update(self, channel: discord.abc.Messageable, sticky: dict):
+        try:
+            await asyncio.sleep(self.debounce_interval)
+            await self.update_sticky_for_channel(channel, sticky, force_update=False)
+        finally:
+            self.debounce_tasks.pop(channel.id, None)
+
+    async def _send_sticky(self, channel: discord.TextChannel, title: str, content: str, fmt: str, colour_value: int):
         if fmt == "embed":
             embed = discord.Embed(
-                title="Sticky Message",
+                title=title or "Sticky Message",
                 description=f"{content}{STICKY_MARKER}",
-                color=discord.Color(colour_value),
+                color=discord.Color(colour_value)
             )
             return await channel.send(embed=embed)
         else:
             return await channel.send(f"{content}{STICKY_MARKER}")
 
-    async def _replace_sticky_atomically(self, channel: GuildTextLike, new_data: Dict):
-        """Under a per-channel lock, remove all old stickies and post the new one exactly once.
-
-        Important: we delete any existing DB row for this channel BEFORE inserting the new one,
-        to guarantee no duplicate rows even if constraints change or were previously broken.
-        """
-        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
-            logging.warning(
-                f"Channel {channel} is not a TextChannel/Thread. Skipping sticky replace."
-            )
-            return
-
-        perms = channel.permissions_for(channel.guild.me)
+    async def create_or_replace_sticky(self, interaction: discord.Interaction, channel: discord.TextChannel, title: str, content: str, fmt: str, colour: discord.Color):
+        perms = channel.permissions_for(interaction.guild.me)
         if not perms.send_messages:
-            logging.warning(f"Insufficient permissions to send in #{channel.name}.")
-            return
+            err = make_embed("Error", "I do not have permission to send messages in this channel.", discord.Color.red())
+            return await interaction.response.send_message(embed=err, ephemeral=True)
+        if fmt == "embed" and not perms.embed_links:
+            err = make_embed("Error", "I do not have permission to embed links in this channel.", discord.Color.red())
+            return await interaction.response.send_message(embed=err, ephemeral=True)
 
-        lock = self.locks.setdefault(channel.id, asyncio.Lock())
-        async with lock:
-            # Purge all prior stickies first (both bulk and manual)
-            await self._purge_old_stickies(channel)
-
-            # If we have a tracked sticky id, ensure it is gone as well
-            tracked = self.stickies.get(channel.id)
-            if tracked and tracked.get("message_id"):
-                try:
-                    old_message = await channel.fetch_message(tracked["message_id"])
-                    try:
-                        await old_message.delete()
-                    except Exception:
-                        pass
-                except discord.NotFound:
-                    pass
-                except Exception as e:
-                    logging.error(
-                        f"Error fetching tracked sticky in #{channel.name}: {e}"
-                    )
-
-            # Explicitly delete any existing DB row for this channel BEFORE we insert the new one
+        # Remove tracked sticky if present
+        if channel.id in self.stickies and self.stickies[channel.id].get("message_id"):
             try:
-                self.delete_sticky_from_db(channel.id)
+                old_msg = await channel.fetch_message(int(self.stickies[channel.id]["message_id"]))
+                await old_msg.delete()
             except Exception:
-                # If the row does not exist yet, ignore
                 pass
 
-            # Post the new sticky
-            sent = await self._send_sticky(
-                channel, new_data["content"], new_data["format"], new_data["color"]
-            )
+        # Send new sticky
+        if fmt == "embed":
+            sent = await self._send_sticky(channel, title, content, "embed", colour.value)
+            colour_value = colour.value
+        else:
+            sent = await self._send_sticky(channel, "", content, "normal", 0)
+            colour_value = 0
 
-            # Update memory and DB with the new single source of truth
-            self.stickies[channel.id] = {
-                "content": new_data["content"],
-                "message_id": sent.id,
-                "format": new_data["format"],
-                "color": new_data["color"],
-            }
-            self.update_sticky_in_db(
-                channel.id,
-                new_data["content"],
-                sent.id,
-                new_data["format"],
-                new_data["color"],
-            )
+        # Save memory and DB
+        self.stickies[channel.id] = {
+            "title":      title if fmt == "embed" else "",
+            "content":    content,
+            "message_id": sent.id,
+            "format":     fmt,
+            "color":      colour_value,
+        }
+        self.update_sticky_in_db(channel.id, self.stickies[channel.id]["title"], content, sent.id, fmt, colour_value)
 
-            # Post-send safety sweep to eliminate any race-created duplicates
-            await self._manual_sweep_for_stickies(channel, skip_ids=[sent.id], limit=25)
+        # Purge any lingering older stickies in history
+        await self._purge_old_stickies(channel, keep_id=sent.id)
 
-    async def update_sticky_for_channel(
-        self, channel: GuildTextLike, sticky: dict, force_update: bool = False
-    ):
-        """Reposition the sticky to the bottom if needed."""
-        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
-            logging.warning(
-                f"Channel {channel} is not a TextChannel/Thread. Skipping sticky update."
-            )
-            return
-
-        perms = channel.permissions_for(channel.guild.me)
-        if not perms.send_messages:
-            logging.warning(
-                f"Insufficient permissions in channel #{channel.name}. Skipping sticky update."
-            )
-            return
-
-        lock = self.locks.setdefault(channel.id, asyncio.Lock())
-        async with lock:
-            loop_time = asyncio.get_running_loop().time()
-
-            # Skip no-op updates when callers do not force a repost and there is no tracked sticky.
-            # This avoids unnecessary API calls in message-heavy channels.
-            if not force_update and not sticky.get("message_id"):
-                return
-
-            if not force_update:
-                last_repost = self.last_repost_times.get(channel.id, 0.0)
-                if (loop_time - last_repost) < self.repost_cooldown:
-                    return
-
-            tracked_message_id = (self.stickies.get(channel.id) or sticky).get("message_id")
-
-            # If the tracked sticky is already the newest message, there is nothing to do.
-            try:
-                latest = [m async for m in channel.history(limit=1)]
-                if latest and tracked_message_id and latest[0].id == tracked_message_id:
-                    return
-            except Exception as e:
-                logging.debug(f"Failed latest-message check in #{channel.name}: {e}")
-
-            # If we still have the tracked sticky in the channel but it is not last, delete it so we can re-send
-            if tracked_message_id:
-                try:
-                    old_message = await channel.fetch_message(tracked_message_id)
-                    try:
-                        await old_message.delete()
-                    except Exception:
-                        pass
-                except discord.NotFound:
-                    pass
-                except Exception as e:
-                    logging.error(
-                        f"Error deleting tracked sticky in channel #{channel.name}: {e}"
-                    )
-
-            # Send fresh sticky at bottom
-            fmt = sticky.get("format", "normal")
-            colour_value = sticky.get("color", discord.Color.blurple().value)
-            new_msg = await self._send_sticky(
-                channel, sticky["content"], fmt, colour_value
-            )
-
-            # Update cache and DB
-            self.stickies[channel.id] = {
-                "content": sticky["content"],
-                "message_id": new_msg.id,
-                "format": fmt,
-                "color": colour_value,
-            }
-            self.update_sticky_in_db(
-                channel.id, sticky["content"], new_msg.id, fmt, colour_value
-            )
-            self.last_repost_times[channel.id] = loop_time
-
-            # Periodic lightweight cleanup to remove stale duplicates without high API churn.
-            last_cleanup = self.last_cleanup_times.get(channel.id, 0.0)
-            if force_update or (loop_time - last_cleanup) >= self.cleanup_interval:
-                await self._manual_sweep_for_stickies(channel, skip_ids=[new_msg.id], limit=100)
-                self.last_cleanup_times[channel.id] = loop_time
-
-    # -----------------------
-    # Events
-    # -----------------------
+        ok = make_embed("Sticky Set", f"Sticky successfully set in {channel.mention}.", discord.Color.green())
+        await interaction.response.send_message(embed=ok, ephemeral=True)
+        audit_log(f"{interaction.user} set a '{fmt}' sticky in #{channel.name}.")
 
     @commands.Cog.listener()
     async def on_ready(self):
         logging.info("\033[96mSticky\033[0m cog synced successfully.")
         audit_log("Sticky cog synced successfully.")
-        # Do not force an update on start to reduce churn. Only fix if missing.
         for channel_id, sticky in list(self.stickies.items()):
             channel = self.bot.get_channel(int(channel_id))
             if channel:
-                try:
-                    # If the tracked message does not exist, replace it, else leave as is.
-                    if sticky.get("message_id"):
-                        try:
-                            await channel.fetch_message(sticky["message_id"])
-                        except discord.NotFound:
-                            await self.update_sticky_for_channel(
-                                channel, sticky, force_update=True
-                            )
-                except Exception:
-                    pass
+                await self.update_sticky_for_channel(channel, sticky, force_update=False)
+        self.initialised = True
 
     @commands.Cog.listener()
     async def on_resumed(self):
-        logging.info("Bot resumed. Ensuring stickies exist.")
-        audit_log("Bot resumed: Ensuring stickies exist.")
+        logging.info("Bot resumed. Updating sticky messages in all channels.")
+        audit_log("Bot resumed: Updating sticky messages in all channels.")
         for channel_id, sticky in list(self.stickies.items()):
             channel = self.bot.get_channel(int(channel_id))
             if channel:
-                try:
-                    if sticky.get("message_id"):
-                        try:
-                            await channel.fetch_message(sticky["message_id"])
-                        except discord.NotFound:
-                            await self.update_sticky_for_channel(
-                                channel, sticky, force_update=True
-                            )
-                except Exception:
-                    pass
+                await self.update_sticky_for_channel(channel, sticky, force_update=False)
+        self.initialised = True
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author == self.bot.user:
             return
         channel = message.channel
-        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
-            return
         if channel.id in self.stickies:
-            # Proper debounce: cancel existing task and reschedule
-            task = self.debounce_tasks.get(channel.id)
-            if task and not task.done():
-                task.cancel()
-            self.debounce_tasks[channel.id] = asyncio.create_task(
-                self._debounced_update(channel, dict(self.stickies[channel.id]))
+            if channel.id in self.debounce_tasks:
+                return
+            self.debounce_tasks[channel.id] = self.bot.loop.create_task(
+                self._debounced_update(channel, self.stickies[channel.id])
             )
 
     @commands.Cog.listener()
     async def on_message_delete(self, message: discord.Message):
         # If the bot's sticky was manually deleted, cancel pending debounce and re-post immediately
-        if message.channel.id in self._suppress_repost:
-            return
         if message.author == self.bot.user and message.channel.id in self.stickies:
             sticky = self.stickies[message.channel.id]
-            if message.id == sticky["message_id"]:
+            if message.id == sticky.get("message_id"):
                 task = self.debounce_tasks.pop(message.channel.id, None)
                 if task:
                     task.cancel()
-                await self.update_sticky_for_channel(
-                    message.channel, sticky, force_update=True
-                )
+                await self.update_sticky_for_channel(message.channel, sticky, force_update=True)
 
-    async def _debounced_update(self, channel: GuildTextLike, sticky: dict):
-        try:
-            await asyncio.sleep(self.debounce_interval)
-            # Channel might have lost its sticky during wait
-            if channel.id not in self.stickies:
-                return
-            await self.update_sticky_for_channel(channel, sticky, force_update=False)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            # Only clear if this exact task is still the active one
-            current = self.debounce_tasks.get(channel.id)
-            if current and current.done():
-                self.debounce_tasks.pop(channel.id, None)
-            elif current is None:
-                pass
-
-    # -----------------------
-    # Commands
-    # -----------------------
-
-    @app_commands.command(
-        name="setsticky", description="Set a sticky message in the channel."
-    )
+    @app_commands.command(name="setsticky", description="Set a sticky message in the channel.")
     async def set_sticky(self, interaction: discord.Interaction):
         view = StickyFormatView(self)
         await interaction.response.send_message(
-            "Choose the sticky message format:", view=view, ephemeral=True
+            embed=discord.Embed(description="Choose the sticky message format:"),
+            view=view,
+            ephemeral=True,
         )
         audit_log(
             f"{interaction.user} invoked /setsticky in channel #{interaction.channel.name}."
         )
 
-    @app_commands.command(
-        name="removesticky", description="Remove the sticky message in the channel."
-    )
+    @app_commands.command(name="removesticky", description="Remove the sticky message in the channel.")
     async def remove_sticky(self, interaction: discord.Interaction):
-        channel = interaction.channel
-        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
-            err = make_embed("Error", "This isn’t a text channel.", discord.Color.red())
-            return await interaction.response.send_message(embed=err, ephemeral=True)
-
-        # Defer early to keep the token valid if sweeping takes time
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True, thinking=True)
-
-        # Remove under lock to avoid races with debounce
-        lock = self.locks.setdefault(channel.id, asyncio.Lock())
-        async with lock:
-            self._suppress_repost.add(channel.id)
-            try:
-                tracked = self.stickies.get(channel.id)
-                old_id = tracked["message_id"] if tracked else None
-                if old_id:
-                    try:
-                        old_msg = await channel.fetch_message(old_id)
-                        await old_msg.delete()
-                    except Exception:
-                        pass
-
-                # Always sweep even if we had no tracked entry
-                await self._purge_old_stickies(channel)
-            finally:
-                # Clean DB record regardless of cache presence
-                self.delete_sticky_from_db(channel.id)
-                self.stickies.pop(channel.id, None)
-                task = self.debounce_tasks.pop(channel.id, None)
-                if task:
-                    task.cancel()
-                self._suppress_repost.discard(channel.id)
-
-        ok = make_embed(
-            "Sticky Removed",
-            f"Removed sticky from {channel.mention}.",
-            discord.Color.green(),
-        )
-        await interaction.followup.send(embed=ok, ephemeral=True)
-        audit_log(f"{interaction.user} removed sticky in #{channel.name}.")
-
-    # -----------------------
-    # New command: liststickies (one sticky per page)
-    # -----------------------
-
-    def _clean_preview_inline(self, text: str, limit: int = 350) -> str:
-        """Strip zero width markers and collapse whitespace for inline preview."""
-        clean = ZERO_WIDTH_RUN.sub("", text or "")
-        clean = " ".join(clean.split())
-        if len(clean) > limit:
-            clean = clean[: limit - 1] + "…"
-        return clean
-
-    def _clean_preview_block(self, text: str, limit: int = 950) -> str:
-        """Clean preview for code block, preserving line breaks, trimming to stay under field limits."""
-        clean = ZERO_WIDTH_RUN.sub("", text or "")
-        # Avoid breaking code fences inside embeds
-        clean = clean.replace("```", "ˋˋˋ")
-        if len(clean) > limit:
-            clean = clean[: limit - 1] + "…"
-        return clean
-
-    async def _build_list_pages_for_guild(
-        self, guild: discord.Guild, requester: discord.Member
-    ) -> List[discord.Embed]:
-        """Build one page per sticky with clear fields and a code-block preview."""
-        pages: List[discord.Embed] = []
-
-        # Order by channel name for stable output
-        items: List[tuple[GuildTextLike, Dict]] = []
-        for ch_id, data in self.stickies.items():
-            channel = self.bot.get_channel(int(ch_id))
-            if (
-                isinstance(channel, (discord.TextChannel, discord.Thread))
-                and channel.guild.id == guild.id
-            ):
-                items.append((channel, data))
-        items.sort(
-            key=lambda tup: tup[0].name if hasattr(tup[0], "name") else str(tup[0].id)
-        )
-
-        if not items:
-            empty = discord.Embed(
-                title="No Stickies Found",
-                description="There are no stickies configured in this server.",
-                color=discord.Color.red(),
-            )
-            empty.set_footer(text="Use /setsticky in a channel to create one.")
-            return [empty]
-
-        total = len(items)
-
-        for idx, (channel, data) in enumerate(items, start=1):
-            fmt = data.get("format", "normal")
-            colour_value = int(data.get("color", 0) or 0)
-            msg_id = data.get("message_id")
-            preview_block = self._clean_preview_block(
-                data.get("content", ""), limit=950
-            )
-
-            # Try to verify whether the tracked message still exists and capture timestamp
-            existence = "Unknown"
-            jump = None
-            created_ts_unix: Optional[int] = None
-            try:
-                if msg_id:
-                    try:
-                        msg = await channel.fetch_message(msg_id)  # type: ignore[arg-type]
-                        jump = msg.jump_url
-                        existence = "Present"
-                        created_ts_unix = int(msg.created_at.timestamp())
-                    except discord.NotFound:
-                        existence = "Missing"
-                        jump = f"https://discord.com/channels/{guild.id}/{channel.id}/{msg_id}"
-                    except discord.Forbidden:
-                        existence = "Cannot verify due to missing permissions"
-                        jump = f"https://discord.com/channels/{guild.id}/{channel.id}/{msg_id}"
-                    except discord.HTTPException:
-                        existence = "Unknown"
-                        jump = f"https://discord.com/channels/{guild.id}/{channel.id}/{msg_id}"
-            except Exception:
-                existence = "Unknown"
-                jump = (
-                    f"https://discord.com/channels/{guild.id}/{channel.id}/{msg_id}"
-                    if msg_id
-                    else None
-                )
-
-            embed_colour = (
-                discord.Color(colour_value)
-                if fmt == "embed" and colour_value
-                else discord.Color.blurple()
-            )
-            emb = discord.Embed(
-                title=f"Sticky • {channel.mention}",
-                description="Details for this channel’s sticky.",
-                color=embed_colour,
-            )
-
-            channel_type = (
-                "Thread" if isinstance(channel, discord.Thread) else "Text Channel"
-            )
-            parent_line = (
-                f"\n• **Parent:** {channel.parent.mention}"
-                if isinstance(channel, discord.Thread) and channel.parent
-                else ""
-            )
-            colour_hex = (
-                f"#{colour_value:06X}" if fmt == "embed" and colour_value else "N/A"
-            )
-            msg_id_line = f"`{msg_id}`" if msg_id else "`None recorded`"
-            link_line = jump if jump else "`N/A`"
-            last_posted_line = (
-                f"<t:{created_ts_unix}:R>" if created_ts_unix else "`Unknown`"
-            )
-
-            details_lines = [
-                f"• **Channel ID:** `{channel.id}`",
-                f"• **Type:** {channel_type}{parent_line}",
-                f"• **Format:** `{fmt}`",
-                f"• **Colour:** `{colour_hex}`",
-                f"• **Message ID:** {msg_id_line}",
-                f"• **Link:** {link_line}",
-                f"• **Status:** {existence}",
-                f"• **Last posted:** {last_posted_line}",
-            ]
-            emb.add_field(name="Details", value="\n".join(details_lines), inline=False)
-
-            if preview_block:
-                emb.add_field(
-                    name="Preview", value=f"```{preview_block}```", inline=False
-                )
-            else:
-                emb.add_field(name="Preview", value="_empty_", inline=False)
-
-            emb.set_footer(
-                text=f"Sticky {idx} of {total} • Use buttons to navigate • /removesticky to delete"
-            )
-            pages.append(emb)
-
-        return pages
-
-    @app_commands.command(
-        name="liststickies",
-        description="List all current stickies across this server. Each sticky appears on its own page.",
-    )
-    @app_commands.default_permissions(manage_messages=True)
-    async def list_stickies(self, interaction: discord.Interaction):
-        """Paginated list of all stickies in the invoking server, using button pagination (one per page)."""
-        if interaction.guild is None:
-            err = make_embed(
-                "Guild Only",
-                "This command can only be used in a server.",
-                discord.Color.red(),
-            )
+        channel = interaction.guild.get_channel(interaction.channel.id)
+        if channel.id not in self.stickies:
+            err = make_embed("Error", f"No sticky found in {channel.mention}.", discord.Color.red())
             return await interaction.response.send_message(embed=err, ephemeral=True)
 
         try:
-            if not interaction.response.is_done():
-                await interaction.response.defer(ephemeral=True, thinking=True)
+            old_msg = await channel.fetch_message(int(self.stickies[channel.id].get("message_id", 0)))
+            await old_msg.delete()
+        except Exception:
+            pass
+        self.delete_sticky_from_db(channel.id)
+        self.stickies.pop(channel.id, None)
 
-            pages = await self._build_list_pages_for_guild(interaction.guild, interaction.user)  # type: ignore[arg-type]
-            view = PagedView(interaction.user.id, pages)
-            if interaction.response.is_done():
-                await interaction.followup.send(
-                    embed=pages[0], view=view, ephemeral=True
-                )
-            else:
-                await interaction.response.send_message(
-                    embed=pages[0], view=view, ephemeral=True
-                )
-
-            audit_log(
-                f"{interaction.user} invoked /liststickies in guild '{interaction.guild.name}' (ID {interaction.guild.id})."
-            )
-        except discord.HTTPException as e:
-            logging.exception(f"Failed to send liststickies message: {e}")
-            try:
-                if interaction.response.is_done():
-                    await interaction.followup.send(
-                        "Sorry, I could not send the list due to a Discord error.",
-                        ephemeral=True,
-                    )
-                else:
-                    await interaction.response.send_message(
-                        "Sorry, I could not send the list due to a Discord error.",
-                        ephemeral=True,
-                    )
-            except Exception:
-                pass
+        ok = make_embed("Sticky Removed", f"Removed sticky from {channel.mention}.", discord.Color.green())
+        await interaction.response.send_message(embed=ok, ephemeral=True)
+        audit_log(f"{interaction.user} removed sticky in #{channel.name}.")
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(StickyMessages(bot))
+    await bot.add_cog(Sticky(bot))
