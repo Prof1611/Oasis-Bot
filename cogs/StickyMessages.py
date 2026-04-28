@@ -138,6 +138,7 @@ class HexContentModal(discord.ui.Modal, title="Custom HEX Sticky"):
 
         # Use the cog helper to create or replace the sticky
         try:
+            await interaction.response.defer(ephemeral=True)
             await self.sticky_cog.create_or_replace_sticky(
                 interaction=interaction,
                 channel=self.channel,
@@ -153,6 +154,8 @@ class HexContentModal(discord.ui.Modal, title="Custom HEX Sticky"):
                 "Something went wrong while setting the sticky message. Please try again later.",
                 discord.Color.red(),
             )
+            if interaction.response.is_done():
+                return await interaction.followup.send(embed=err, ephemeral=True)
             return await interaction.response.send_message(embed=err, ephemeral=True)
 
 
@@ -221,6 +224,7 @@ class StickyModal(discord.ui.Modal, title="Set Sticky Message"):
         content = self.sticky_message.value
         title = self.sticky_title.value.strip() if (self.selected_format == "embed" and self.sticky_title.value) else ""
         channel = interaction.channel
+        await interaction.response.defer(ephemeral=True)
         await self.sticky_cog.create_or_replace_sticky(
             interaction=interaction,
             channel=channel,
@@ -395,9 +399,13 @@ class Sticky(commands.Cog):
         perms = channel.permissions_for(interaction.guild.me)
         if not perms.send_messages:
             err = make_embed("Error", "I do not have permission to send messages in this channel.", discord.Color.red())
+            if interaction.response.is_done():
+                return await interaction.followup.send(embed=err, ephemeral=True)
             return await interaction.response.send_message(embed=err, ephemeral=True)
         if fmt == "embed" and not perms.embed_links:
             err = make_embed("Error", "I do not have permission to embed links in this channel.", discord.Color.red())
+            if interaction.response.is_done():
+                return await interaction.followup.send(embed=err, ephemeral=True)
             return await interaction.response.send_message(embed=err, ephemeral=True)
 
         # Remove tracked sticky if present
@@ -430,7 +438,10 @@ class Sticky(commands.Cog):
         await self._purge_old_stickies(channel, keep_id=sent.id)
 
         ok = make_embed("Sticky Set", f"Sticky successfully set in {channel.mention}.", discord.Color.green())
-        await interaction.response.send_message(embed=ok, ephemeral=True)
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=ok, ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=ok, ephemeral=True)
         audit_log(f"{interaction.user} set a '{fmt}' sticky in #{channel.name}.")
 
     @commands.Cog.listener()
