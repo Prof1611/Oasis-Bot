@@ -61,6 +61,12 @@ features:
       - gaana
       - saavn
 
+  moderation:
+    # Channel where moderation actions such as bans are logged.
+    logs_channel_id: 1379002518721400857
+    # Form used when banned members wish to appeal a permanent ban.
+    ban_appeal_form_url: "https://google.com"
+
 appearance:
   colours:
     # Embed colour used for success messages.
